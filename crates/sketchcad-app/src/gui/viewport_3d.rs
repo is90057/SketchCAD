@@ -109,7 +109,12 @@ pub struct Viewport3D {
     doc_watcher: DocWatcher,
     /// Animated camera turn requested from the ViewCube: target (yaw, pitch)
     view_anim: Option<(f64, f64)>,
+    /// Bounding box of the visible model, used for the section-cut slider range
+    scene_bounds: Option<(Point3D, Point3D)>,
 }
+
+/// Plan-style cut height above a floor level for the Z section (mm)
+const SECTION_CUT_ABOVE_FLOOR: f64 = 1200.0;
 
 /// Default "home" orientation (isometric-like view from the south-east)
 const HOME_YAW: f64 = 0.75;
@@ -132,6 +137,7 @@ impl Viewport3D {
             cache: None,
             doc_watcher: DocWatcher::default(),
             view_anim: None,
+            scene_bounds: None,
         }
     }
 
@@ -267,7 +273,7 @@ impl Viewport3D {
         if self.settings.show_settings_panel {
             let settings_rect = Rect::from_min_size(
                 Pos2::new(rect.max.x - 330.0, rect.min.y + 48.0),
-                egui::vec2(315.0, 480.0),
+                egui::vec2(315.0, 560.0),
             );
 
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(settings_rect), |ui| {
@@ -308,21 +314,62 @@ impl Viewport3D {
                         ui.label(egui::RichText::new("4. 🔪 3D 動態剖切盒 (Section Cut):").small().strong().color(Color32::from_rgb(255, 215, 0)));
                         ui.checkbox(&mut self.settings.enable_section_cut, "啟用剖切面 (透視室內家具與格局)");
                         if self.settings.enable_section_cut {
+                            let previous_axis = self.settings.section_axis;
                             ui.horizontal(|ui| {
                                 ui.label("切面軸向:");
                                 ui.radio_value(&mut self.settings.section_axis, 0, "X");
                                 ui.radio_value(&mut self.settings.section_axis, 1, "Y");
                                 ui.radio_value(&mut self.settings.section_axis, 2, "Z (平剖)");
                             });
+                            if self.settings.section_axis != previous_axis {
+                                self.settings.section_offset = self.default_section_offset(doc) as f32;
+                            }
+
+                            // Slider spans the model extent along the chosen axis
+                            let (min, max) = self.section_range();
                             ui.horizontal(|ui| {
                                 ui.label("切面位置:");
-                                let (min, max) = match self.settings.section_axis {
-                                    0 => (-2000.0, 16000.0),
-                                    1 => (-2000.0, 16000.0),
-                                    _ => (0.0, 6000.0),
-                                };
-                                ui.add(egui::Slider::new(&mut self.settings.section_offset, min..=max).step_by(50.0).suffix(" mm"));
+                                ui.add(
+                                    egui::Slider::new(&mut self.settings.section_offset, min..=max)
+                                        .step_by(10.0)
+                                        .suffix(" mm"),
+                                );
                             });
+                            let span = (max - min).max(1.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "模型範圍 {:.0} ~ {:.0} mm · 目前位於 {:.0}%",
+                                    min,
+                                    max,
+                                    (self.settings.section_offset - min) / span * 100.0
+                                ))
+                                .small()
+                                .color(Color32::from_rgb(160, 175, 195)),
+                            );
+
+                            // Z cut relative to the building storeys (樓層標高 + 1.2 m)
+                            if self.settings.section_axis == 2 && !doc.storeys().is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.label("依樓層:");
+                                    let current = doc.storeys().iter().find(|st| {
+                                        ((st.elevation + SECTION_CUT_ABOVE_FLOOR) as f32 - self.settings.section_offset).abs() < 1.0
+                                    });
+                                    egui::ComboBox::from_id_salt("section_storey")
+                                        .selected_text(current.map_or("自訂".to_string(), |st| st.name.clone()))
+                                        .show_ui(ui, |ui| {
+                                            for st in doc.storeys() {
+                                                let label = format!(
+                                                    "{}  (EL {:+.2} m + 1.2 m)",
+                                                    st.name,
+                                                    st.source_elevation.unwrap_or(st.elevation) / 1000.0
+                                                );
+                                                if ui.selectable_label(current == Some(st), label).clicked() {
+                                                    self.settings.section_offset = (st.elevation + SECTION_CUT_ABOVE_FLOOR) as f32;
+                                                }
+                                            }
+                                        });
+                                });
+                            }
                             ui.checkbox(&mut self.settings.section_invert, "反轉剖切方向");
                         }
 
@@ -540,6 +587,49 @@ impl Viewport3D {
         (eye, forward, right, up)
     }
 
+    /// Section slider range along the current axis: the visible model extent plus a margin.
+    fn section_range(&self) -> (f32, f32) {
+        let axis = self.settings.section_axis.min(2) as usize;
+        match self.scene_bounds {
+            Some((min, max)) => {
+                let (lo, hi) = (min[axis], max[axis]);
+                let margin = ((hi - lo) * 0.02).max(100.0);
+                // Whole 100 mm bounds so slider steps land on round values
+                (((lo - margin) / 100.0).floor() as f32 * 100.0, ((hi + margin) / 100.0).ceil() as f32 * 100.0)
+            }
+            None => (0.0, 6000.0),
+        }
+    }
+
+    /// Sensible cut position for the current axis: the middle of the model for X / Y, and
+    /// 1.2 m above the ground-floor storey (or the model base) for a Z plan cut.
+    fn default_section_offset(&self, doc: &BimDocument) -> f64 {
+        let axis = self.settings.section_axis.min(2) as usize;
+        let Some((min, max)) = self.scene_bounds else { return 2600.0 };
+        if axis < 2 {
+            return (min[axis] + max[axis]) * 0.5;
+        }
+        // Ground floor: the storey whose authored elevation is closest to ±0
+        let floor = doc
+            .storeys()
+            .iter()
+            .min_by(|a, b| {
+                let ground = |st: &sketchcad_bim::Storey| st.source_elevation.unwrap_or(st.elevation).abs();
+                ground(a).total_cmp(&ground(b))
+            })
+            .map_or(min.z, |st| st.elevation);
+        (floor + SECTION_CUT_ABOVE_FLOOR).min((min.z + max.z) * 0.5).max(min.z)
+    }
+
+    /// Records the model bounds and moves the cut back into range if the model changed.
+    fn update_scene_bounds(&mut self, bounds: Option<(Point3D, Point3D)>, doc: &BimDocument) {
+        self.scene_bounds = bounds;
+        let (min, max) = self.section_range();
+        if !(min..=max).contains(&self.settings.section_offset) {
+            self.settings.section_offset = self.default_section_offset(doc) as f32;
+        }
+    }
+
     /// Hash of the display settings that are baked into the cached scene geometry.
     fn style_fingerprint(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -677,6 +767,10 @@ impl Viewport3D {
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.upload_geometry(&geom);
             }
+            let bounds = cache.pick_tris.iter().flat_map(|t| t.v).fold(None, |acc: Option<(Point3D, Point3D)>, p| {
+                Some(acc.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
+            });
+            self.update_scene_bounds(bounds, doc);
             self.cache = Some(cache);
         }
 
@@ -835,6 +929,7 @@ impl Viewport3D {
             0.0
         };
 
+        let mut bounds: Option<(Point3D, Point3D)> = None;
         for elem in doc.all_elements() {
             if !doc.is_visible(elem.id()) {
                 continue;
@@ -843,6 +938,9 @@ impl Viewport3D {
             let mut mesh = elem.to_3d_mesh();
             mesh.compute_crease_edges(CREASE_ANGLE_DEG.to_radians());
             let material = material_for(kind, &self.settings);
+            if let Some(b) = mesh.bbox() {
+                bounds = Some(bounds.map_or((b.min, b.max), |(lo, hi)| (lo.min(b.min), hi.max(b.max))));
+            }
 
             for i in 0..mesh.triangle_count() {
                 let v0 = mesh.positions[mesh.indices[i * 3] as usize];
@@ -881,6 +979,8 @@ impl Viewport3D {
                 });
             }
         }
+
+        self.update_scene_bounds(bounds, doc);
 
         // Painter's Algorithm: Sort from furthest (highest depth) to closest (lowest depth)
         scene_polys.sort_unstable_by(|a, b| b.depth.total_cmp(&a.depth));
@@ -1062,5 +1162,44 @@ fn point_in_triangle(p: Pos2, p0: Pos2, p1: Pos2, p2: Pos2) -> bool {
     let has_neg = (d1 < -0.01) || (d2 < -0.01) || (d3 < -0.01);
     let has_pos = (d1 > 0.01) || (d2 > 0.01) || (d3 > 0.01);
     !(has_neg && has_pos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sketchcad_bim::Storey;
+
+    fn viewport_with_bounds(min: Point3D, max: Point3D, doc: &BimDocument) -> Viewport3D {
+        let mut vp = Viewport3D::new();
+        vp.update_scene_bounds(Some((min, max)), doc);
+        vp
+    }
+
+    #[test]
+    fn section_range_follows_model_extent() {
+        let doc = BimDocument::new("t");
+        let mut vp = viewport_with_bounds(Point3D::new(-6000.0, -4000.0, 0.0), Point3D::new(6000.0, 4000.0, 18000.0), &doc);
+        vp.settings.section_axis = 2;
+        let (lo, hi) = vp.section_range();
+        assert!(lo < 0.0 && hi > 18000.0, "Z range must cover the whole 18 m building: {lo}..{hi}");
+        vp.settings.section_axis = 0;
+        let (lo, hi) = vp.section_range();
+        assert!(lo < -6000.0 && hi > 6000.0);
+        assert_eq!(vp.default_section_offset(&doc), 0.0); // middle of X
+    }
+
+    #[test]
+    fn z_default_is_ground_floor_plus_cut_height_and_out_of_range_cut_is_reset() {
+        let mut doc = BimDocument::new("t");
+        // Geometry shifted so the basement sits at 0 (as the IFC importer does)
+        let storey = |name: &str, z: f64| Storey { name: name.into(), elevation: z + 1500.0, source_elevation: Some(z) };
+        doc.set_storeys(vec![storey("BASS", -1500.0), storey("GL", 0.0), storey("2FL", 3850.0)]);
+
+        let mut vp = Viewport3D::new();
+        vp.settings.section_offset = 50_000.0; // far outside the model
+        vp.update_scene_bounds(Some((Point3D::ZERO, Point3D::new(10_000.0, 10_000.0, 18_000.0))), &doc);
+        // GL (authored ±0) is at z = 1500 in model space -> cut at 2700
+        assert_eq!(vp.settings.section_offset, 2700.0);
+    }
 }
 
