@@ -1,0 +1,111 @@
+# Builds SketchCAD for Windows and macOS and publishes the packages.
+#
+# - Push a tag like `v0.4.0`          -> build + create a GitHub Release with the packages
+# - Run manually (Actions tab)        -> build only, packages downloadable as workflow artifacts
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "value=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --release --locked -p sketchcad-app --target x86_64-pc-windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: >
+          ./scripts/package-windows.ps1
+          -Version ${{ steps.version.outputs.value }}
+          -Binary target/x86_64-pc-windows-msvc/release/sketchcad.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sketchcad-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal (Apple Silicon + Intel)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        run: echo "value=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --locked -p sketchcad-app --target aarch64-apple-darwin
+          cargo build --release --locked -p sketchcad-app --target x86_64-apple-darwin
+
+      - name: Package
+        run: |
+          chmod +x scripts/package-macos.sh
+          scripts/package-macos.sh "${{ steps.version.outputs.value }}" \
+            target/aarch64-apple-darwin/release/sketchcad \
+            target/x86_64-apple-darwin/release/sketchcad
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sketchcad-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: SketchCAD ${{ github.ref_name }}
+          files: dist/*
+          generate_release_notes: true

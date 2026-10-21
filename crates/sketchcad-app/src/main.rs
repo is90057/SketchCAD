@@ -1,3 +1,6 @@
+// Release builds on Windows are GUI apps: no console window pops up behind SketchCAD
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 mod gui;
 pub mod sample_generator;
 
@@ -15,6 +18,8 @@ use std::fs;
 use std::path::Path;
 
 fn main() -> Result<()> {
+    use_writable_workdir_for_app_bundle();
+
     // Automatically generate sample CAD & BIM files if not already present
     if !Path::new("samples/sample_villa.ifc").exists() {
         println!("📦 正在自動產出範例 CAD/BIM 檔案庫 (DWG, DXF, IFC, BCF)...");
@@ -48,6 +53,23 @@ fn main() -> Result<()> {
             Box::new(|cc| Ok(Box::new(SketchCadApp::new(cc)))),
         )
         .map_err(|e| anyhow::anyhow!("GUI error: {:?}", e))
+    }
+}
+
+/// A macOS `.app` launched from Finder starts with `/` as working directory, where the relative
+/// `samples/` and `exports/` folders cannot be written. Use `~/Documents/SketchCAD` instead.
+fn use_writable_workdir_for_app_bundle() {
+    #[cfg(target_os = "macos")]
+    {
+        let in_bundle = env::current_exe()
+            .map(|exe| exe.to_string_lossy().contains(".app/Contents/MacOS/"))
+            .unwrap_or(false);
+        if let (true, Some(home)) = (in_bundle, env::var_os("HOME")) {
+            let dir = Path::new(&home).join("Documents").join("SketchCAD");
+            if fs::create_dir_all(&dir).is_ok() {
+                let _ = env::set_current_dir(&dir);
+            }
+        }
     }
 }
 
