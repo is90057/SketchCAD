@@ -206,4 +206,4 @@ cargo run -p sketchcad-app -- --cli
 
 ## 📄 License
 
-SketchCAD is dual-licensed under **MIT OR Apache-2.0**.
+SketchCAD is dual-licensed under **MIT**.

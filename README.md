@@ -167,4 +167,4 @@ cargo run -p sketchcad-app -- --cli
 
 ## 📄 授權條款 (License)
 
-本專案採用 **MIT OR Apache-2.0** 雙重授權條款。詳見專案目錄下授權文件。
+本專案採用 **MIT** 雙重授權條款。詳見專案目錄下授權文件。
