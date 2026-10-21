@@ -9,6 +9,7 @@ use sketchcad_bim::{
 use sketchcad_core::{ElementId, Point2D, Point3D};
 use sketchcad_geom::OpeningVoid;
 use sketchcad_io::{BcfHandler, BcfTopic, DwgAdapter, DxfHandler, IfcExporter, IfcImporter};
+use crate::updater::{self, UpdateState, Updater};
 use std::path::Path;
 
 /// Application developer shown in the About dialog
@@ -60,6 +61,7 @@ pub struct SketchCadApp {
     pub export_bcf_title: String,
     pub export_bcf_desc: String,
     pub show_about: bool,
+    pub updater: Updater,
 }
 
 impl SketchCadApp {
@@ -68,6 +70,11 @@ impl SketchCadApp {
 
         let mut doc = BimDocument::new("SketchCAD Architectural Project");
         Self::populate_sample_model(&mut doc);
+
+        // Check GitHub for a newer release in the background at startup
+        updater::cleanup_previous_install();
+        let updater = Updater::default();
+        updater.check(&cc.egui_ctx, false);
 
         let mut viewport_3d = Viewport3D::new();
         viewport_3d.attach_gpu(cc.wgpu_render_state.as_ref());
@@ -95,6 +102,7 @@ impl SketchCadApp {
             export_bcf_title: "SketchCAD 設計議題審查".to_string(),
             export_bcf_desc: "由 SketchCAD 桌面端匯出之協同審查議題".to_string(),
             show_about: false,
+            updater,
         }
     }
 
@@ -646,15 +654,132 @@ impl SketchCadApp {
                         ui.end_row();
                     });
                     ui.add_space(10.0);
-                    if ui.button("確定").clicked() {
-                        self.show_about = false;
-                    }
+                    ui.horizontal(|ui| {
+                        let busy = self.updater.is_busy();
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("🔄 檢查更新"))
+                            .on_hover_text("到 GitHub 檢查是否有新版本")
+                            .clicked()
+                        {
+                            self.updater.check(ctx, true);
+                        }
+                        if matches!(self.updater.state(), UpdateState::Checking { manual: true }) {
+                            ui.spinner();
+                            ui.label("檢查中…");
+                        }
+                        if ui.button("確定").clicked() {
+                            self.show_about = false;
+                        }
+                    });
                     ui.add_space(4.0);
                 });
             });
         if !open {
             self.show_about = false;
         }
+    }
+
+    /// Update prompts: new version found, download progress, restart, errors.
+    fn render_update_window(&mut self, ctx: &egui::Context) {
+        let state = self.updater.state();
+        let title = match &state {
+            UpdateState::UpToDate => "檢查更新",
+            UpdateState::Available(_) => "發現新版本",
+            UpdateState::Downloading { .. } => "正在更新",
+            UpdateState::Installed { .. } => "更新完成",
+            UpdateState::Failed { .. } => "更新失敗",
+            UpdateState::Idle | UpdateState::Checking { .. } => return,
+        };
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                match state {
+                    UpdateState::UpToDate => {
+                        ui.label(format!("目前已是最新版本 (v{})。", app_version()));
+                        ui.add_space(8.0);
+                        if ui.button("確定").clicked() {
+                            self.updater.dismiss();
+                        }
+                    }
+                    UpdateState::Available(release) => {
+                        ui.label(
+                            egui::RichText::new(format!("SketchCAD v{} 已發布", release.version()))
+                                .strong()
+                                .size(15.0),
+                        );
+                        ui.label(format!("目前版本：v{}", app_version()));
+                        if let Some(notes) = release.body.as_deref().filter(|b| !b.trim().is_empty()) {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("更新內容：").strong());
+                            egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                ui.label(notes);
+                            });
+                        }
+                        ui.add_space(8.0);
+                        let self_update = Updater::can_self_update(&release);
+                        if self_update {
+                            ui.label(
+                                egui::RichText::new("更新完成後需要重新啟動，請先儲存目前的專案。")
+                                    .small()
+                                    .color(egui::Color32::from_rgb(240, 190, 90)),
+                            );
+                        }
+                        ui.horizontal(|ui| {
+                            let label = if self_update { "⬇ 立即更新" } else { "🌐 前往下載頁面" };
+                            if ui.button(label).clicked() {
+                                self.updater.install(ctx, release.clone());
+                            }
+                            if ui.button("稍後再說").clicked() {
+                                self.updater.dismiss();
+                            }
+                        });
+                    }
+                    UpdateState::Downloading { version, received, total } => {
+                        ui.label(format!("正在下載 SketchCAD v{version}…"));
+                        let fraction = if total > 0 { received as f32 / total as f32 } else { 0.0 };
+                        ui.add(
+                            egui::ProgressBar::new(fraction)
+                                .desired_width(320.0)
+                                .text(format!("{:.1} / {:.1} MB", received as f64 / 1e6, total as f64 / 1e6)),
+                        );
+                    }
+                    UpdateState::Installed { version, relaunch } => {
+                        ui.label(format!("已更新至 v{version}，重新啟動後即可使用新版本。"));
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("🔁 立即重新啟動").clicked() {
+                                match updater::relaunch(&relaunch) {
+                                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                    Err(e) => self.show_notify(format!("無法重新啟動：{e}，請手動開啟 SketchCAD")),
+                                }
+                            }
+                            if ui.button("稍後").clicked() {
+                                self.updater.dismiss();
+                            }
+                        });
+                    }
+                    UpdateState::Failed { message, release_url } => {
+                        ui.label(message);
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if let Some(url) = release_url {
+                                if ui.button("🌐 手動下載").clicked() {
+                                    ctx.open_url(egui::OpenUrl::new_tab(url));
+                                    self.updater.dismiss();
+                                }
+                            }
+                            if ui.button("關閉").clicked() {
+                                self.updater.dismiss();
+                            }
+                        });
+                    }
+                    UpdateState::Idle | UpdateState::Checking { .. } => {}
+                }
+            });
     }
 
     pub fn load_sample_villa_ifc(&mut self) {
@@ -1492,6 +1617,7 @@ impl eframe::App for SketchCadApp {
         // 6. File Dialog Modals (Open, Export, Save As)
         self.render_file_modals(ctx);
         self.render_about_window(ctx);
+        self.render_update_window(ctx);
     }
 }
 

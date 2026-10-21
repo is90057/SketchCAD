@@ -19,3 +19,7 @@ eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true
 bytemuck = { version = "1.16", features = ["derive"] }
+ureq = "2.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+zip = { workspace = true }

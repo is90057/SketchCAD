@@ -3,6 +3,7 @@
 
 mod gui;
 pub mod sample_generator;
+mod updater;
 
 use anyhow::Result;
 use eframe::egui;
