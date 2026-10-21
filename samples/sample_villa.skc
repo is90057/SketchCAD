@@ -1,0 +1,604 @@
+{
+  "format_version": 1,
+  "app_version": "0.1.0",
+  "name": "Modern Architectural Villa 現代度假別墅",
+  "created_at": "2026-10-20T08:49:36.366846+00:00",
+  "modified_at": "2026-10-20T08:49:36.366846+00:00",
+  "elements": [
+    {
+      "Column": {
+        "id": "abbe5660-96f2-4ff2-ae2c-1d1ca185e807",
+        "name": "Structural Column 結構柱",
+        "position": [
+          5500.0,
+          4000.0
+        ],
+        "width": 500.0,
+        "depth": 500.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Window": {
+        "id": "71c4fa3e-8bb1-49ef-b94b-759b4f66686b",
+        "name": "Double Glazed Window 氣密鋁門窗",
+        "host_wall_id": "b8b65144-8088-4c73-8989-1d7372b49510",
+        "offset_along_wall": 4000.0,
+        "sill_height": 900.0,
+        "width": 2000.0,
+        "height": 1400.0,
+        "material": {
+          "name": "Double Glazed Glass 雙層中空玻璃",
+          "density_kg_m3": 2500.0,
+          "cost_per_m3": 45000.0,
+          "color": {
+            "r": 150,
+            "g": 220,
+            "b": 240,
+            "a": 160
+          },
+          "thermal_conductivity": 1.1
+        },
+        "unit_price": 18200.0,
+        "world_pos": [
+          8000.0,
+          8000.0
+        ],
+        "wall_dir": [
+          -1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "Wall": {
+        "id": "b8b65144-8088-4c73-8989-1d7372b49510",
+        "name": "Basic Wall 基礎牆體",
+        "start": [
+          12000.0,
+          8000.0
+        ],
+        "end": [
+          0.0,
+          8000.0
+        ],
+        "thickness": 200.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        },
+        "openings": [
+          {
+            "offset_along_wall": 4000.0,
+            "width": 2000.0,
+            "base_z": 900.0,
+            "height": 1400.0
+          }
+        ],
+        "hosted_openings": []
+      }
+    },
+    {
+      "Door": {
+        "id": "59e061cc-e2dd-49be-9a3d-b1ad497f48c6",
+        "name": "Single Flush Door 單扇平開門",
+        "host_wall_id": "8c42aa77-0100-4afd-9966-23fb1be27800",
+        "offset_along_wall": 2500.0,
+        "width": 900.0,
+        "height": 2100.0,
+        "thickness": 45.0,
+        "swing": "InwardLeft",
+        "material": {
+          "name": "Solid Oak Timber 實木橡木",
+          "density_kg_m3": 720.0,
+          "cost_per_m3": 38000.0,
+          "color": {
+            "r": 160,
+            "g": 120,
+            "b": 80,
+            "a": 255
+          },
+          "thermal_conductivity": 0.13
+        },
+        "unit_price": 9200.0,
+        "world_pos": [
+          5500.0,
+          2500.0
+        ],
+        "wall_dir": [
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "Wall": {
+        "id": "f0f5490b-3ca8-47c4-9455-e1797c0ec262",
+        "name": "Basic Wall 基礎牆體",
+        "start": [
+          0.0,
+          0.0
+        ],
+        "end": [
+          12000.0,
+          0.0
+        ],
+        "thickness": 200.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        },
+        "openings": [
+          {
+            "offset_along_wall": 2000.0,
+            "width": 1200.0,
+            "base_z": 0.0,
+            "height": 2200.0
+          },
+          {
+            "offset_along_wall": 6000.0,
+            "width": 3000.0,
+            "base_z": 500.0,
+            "height": 2000.0
+          }
+        ],
+        "hosted_openings": []
+      }
+    },
+    {
+      "Column": {
+        "id": "3338df62-fe1d-4292-9ca5-9b757ce5df27",
+        "name": "Structural Column 結構柱",
+        "position": [
+          0.0,
+          0.0
+        ],
+        "width": 500.0,
+        "depth": 500.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Door": {
+        "id": "bae1ea91-e53d-4478-9750-001684e898f9",
+        "name": "Single Flush Door 單扇平開門",
+        "host_wall_id": "f0f5490b-3ca8-47c4-9455-e1797c0ec262",
+        "offset_along_wall": 2000.0,
+        "width": 1200.0,
+        "height": 2200.0,
+        "thickness": 45.0,
+        "swing": "InwardLeft",
+        "material": {
+          "name": "Solid Oak Timber 實木橡木",
+          "density_kg_m3": 720.0,
+          "cost_per_m3": 38000.0,
+          "color": {
+            "r": 160,
+            "g": 120,
+            "b": 80,
+            "a": 255
+          },
+          "thermal_conductivity": 0.13
+        },
+        "unit_price": 18500.0,
+        "world_pos": [
+          2000.0,
+          0.0
+        ],
+        "wall_dir": [
+          1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "Wall": {
+        "id": "3bf21058-29f9-40ad-9614-caa5dcc18ef5",
+        "name": "Basic Wall 基礎牆體",
+        "start": [
+          12000.0,
+          0.0
+        ],
+        "end": [
+          12000.0,
+          8000.0
+        ],
+        "thickness": 200.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        },
+        "openings": [
+          {
+            "offset_along_wall": 3000.0,
+            "width": 1800.0,
+            "base_z": 900.0,
+            "height": 1400.0
+          }
+        ],
+        "hosted_openings": []
+      }
+    },
+    {
+      "Wall": {
+        "id": "8c42aa77-0100-4afd-9966-23fb1be27800",
+        "name": "Basic Wall 基礎牆體",
+        "start": [
+          5500.0,
+          0.0
+        ],
+        "end": [
+          5500.0,
+          8000.0
+        ],
+        "thickness": 150.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Red Brick 紅磚",
+          "density_kg_m3": 1800.0,
+          "cost_per_m3": 2600.0,
+          "color": {
+            "r": 190,
+            "g": 85,
+            "b": 65,
+            "a": 255
+          },
+          "thermal_conductivity": 0.8
+        },
+        "openings": [
+          {
+            "offset_along_wall": 2500.0,
+            "width": 900.0,
+            "base_z": 0.0,
+            "height": 2100.0
+          }
+        ],
+        "hosted_openings": []
+      }
+    },
+    {
+      "Column": {
+        "id": "af4e28fc-d2e8-4870-8391-047ff977782f",
+        "name": "Structural Column 結構柱",
+        "position": [
+          12000.0,
+          8000.0
+        ],
+        "width": 500.0,
+        "depth": 500.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Beam": {
+        "id": "f6976103-9771-488a-bf2b-3e01d737fa4d",
+        "name": "Structural Beam 結構大樑",
+        "start": [
+          0.0,
+          4000.0,
+          3600.0
+        ],
+        "end": [
+          12000.0,
+          4000.0,
+          3600.0
+        ],
+        "width": 350.0,
+        "depth": 700.0,
+        "material": {
+          "name": "Structural Steel 結構鋼材",
+          "density_kg_m3": 7850.0,
+          "cost_per_m3": 65000.0,
+          "color": {
+            "r": 100,
+            "g": 110,
+            "b": 120,
+            "a": 255
+          },
+          "thermal_conductivity": 50.0
+        }
+      }
+    },
+    {
+      "Window": {
+        "id": "e41ad774-7a1c-4537-985c-b381ea9fe403",
+        "name": "Double Glazed Window 氣密鋁門窗",
+        "host_wall_id": "f0f5490b-3ca8-47c4-9455-e1797c0ec262",
+        "offset_along_wall": 6000.0,
+        "sill_height": 500.0,
+        "width": 3000.0,
+        "height": 2000.0,
+        "material": {
+          "name": "Double Glazed Glass 雙層中空玻璃",
+          "density_kg_m3": 2500.0,
+          "cost_per_m3": 45000.0,
+          "color": {
+            "r": 150,
+            "g": 220,
+            "b": 240,
+            "a": 160
+          },
+          "thermal_conductivity": 1.1
+        },
+        "unit_price": 36000.0,
+        "world_pos": [
+          6000.0,
+          0.0
+        ],
+        "wall_dir": [
+          1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "Column": {
+        "id": "2bef84e6-4f63-4dda-b5db-18ed94e46f3e",
+        "name": "Structural Column 結構柱",
+        "position": [
+          12000.0,
+          0.0
+        ],
+        "width": 500.0,
+        "depth": 500.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Ceiling": {
+        "id": "31b08af7-408c-4e53-9456-0b4a177418f6",
+        "name": "Suspended Ceiling 輕鋼架天花板",
+        "origin": [
+          0.0,
+          0.0
+        ],
+        "width": 5500.0,
+        "depth": 8000.0,
+        "thickness": 30.0,
+        "elevation": 3000.0,
+        "grid_spacing": 600.0,
+        "material": {
+          "name": "Gypsum Plaster Board 輕鋼架石膏板",
+          "density_kg_m3": 850.0,
+          "cost_per_m3": 15000.0,
+          "color": {
+            "r": 240,
+            "g": 240,
+            "b": 235,
+            "a": 255
+          },
+          "thermal_conductivity": 0.25
+        }
+      }
+    },
+    {
+      "Wall": {
+        "id": "771d5df0-ad75-4411-b983-c20bf1dacac7",
+        "name": "Basic Wall 基礎牆體",
+        "start": [
+          0.0,
+          8000.0
+        ],
+        "end": [
+          0.0,
+          0.0
+        ],
+        "thickness": 200.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        },
+        "openings": [],
+        "hosted_openings": []
+      }
+    },
+    {
+      "Column": {
+        "id": "e084e5a7-674d-4d3d-8b75-cf550cc006b7",
+        "name": "Structural Column 結構柱",
+        "position": [
+          0.0,
+          8000.0
+        ],
+        "width": 500.0,
+        "depth": 500.0,
+        "height": 3600.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Window": {
+        "id": "f8ddc718-ae53-4e23-a206-7b2354a42a59",
+        "name": "Double Glazed Window 氣密鋁門窗",
+        "host_wall_id": "3bf21058-29f9-40ad-9614-caa5dcc18ef5",
+        "offset_along_wall": 3000.0,
+        "sill_height": 900.0,
+        "width": 1800.0,
+        "height": 1400.0,
+        "material": {
+          "name": "Double Glazed Glass 雙層中空玻璃",
+          "density_kg_m3": 2500.0,
+          "cost_per_m3": 45000.0,
+          "color": {
+            "r": 150,
+            "g": 220,
+            "b": 240,
+            "a": 160
+          },
+          "thermal_conductivity": 1.1
+        },
+        "unit_price": 16800.0,
+        "world_pos": [
+          12000.0,
+          3000.0
+        ],
+        "wall_dir": [
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "Slab": {
+        "id": "74eba65f-a1cc-4937-abc1-c88e136400da",
+        "name": "Structural Floor Slab 結構樓板",
+        "origin": [
+          0.0,
+          0.0
+        ],
+        "width": 12000.0,
+        "depth": 8000.0,
+        "thickness": 200.0,
+        "base_z": 0.0,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    },
+    {
+      "Stairs": {
+        "id": "e0df393f-d0dd-43af-87bc-342650197d2e",
+        "name": "Straight Run Stairs 直通樓梯",
+        "start": [
+          500.0,
+          4500.0
+        ],
+        "end": [
+          500.0,
+          7500.0
+        ],
+        "width": 1000.0,
+        "total_rise": 3600.0,
+        "base_z": 0.0,
+        "num_steps": 18,
+        "material": {
+          "name": "Reinforced Concrete 鋼筋混凝土",
+          "density_kg_m3": 2400.0,
+          "cost_per_m3": 3200.0,
+          "color": {
+            "r": 180,
+            "g": 180,
+            "b": 180,
+            "a": 255
+          },
+          "thermal_conductivity": 1.7
+        }
+      }
+    }
+  ],
+  "hidden_elements": []
+}

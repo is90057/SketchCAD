@@ -1,0 +1,18 @@
+[package]
+name = "sketchcad-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sketchcad-core = { path = "../sketchcad-core" }
+sketchcad-geom = { path = "../sketchcad-geom" }
+sketchcad-bim = { path = "../sketchcad-bim" }
+glam.workspace = true
+dxf.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true

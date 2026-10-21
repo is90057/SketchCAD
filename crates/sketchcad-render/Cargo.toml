@@ -1,0 +1,11 @@
+[package]
+name = "sketchcad-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sketchcad-core = { path = "../sketchcad-core" }
+sketchcad-geom = { path = "../sketchcad-geom" }
+glam.workspace = true
+serde.workspace = true

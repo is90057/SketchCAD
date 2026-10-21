@@ -1,0 +1,21 @@
+[package]
+name = "sketchcad-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sketchcad"
+path = "src/main.rs"
+
+[dependencies]
+sketchcad-core = { path = "../sketchcad-core" }
+sketchcad-geom = { path = "../sketchcad-geom" }
+sketchcad-bim = { path = "../sketchcad-bim" }
+sketchcad-io = { path = "../sketchcad-io" }
+sketchcad-render = { path = "../sketchcad-render" }
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+bytemuck = { version = "1.16", features = ["derive"] }
