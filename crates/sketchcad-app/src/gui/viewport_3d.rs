@@ -107,7 +107,14 @@ pub struct Viewport3D {
     gpu: Option<GpuScene>,
     cache: Option<SceneCache>,
     doc_watcher: DocWatcher,
+    /// Animated camera turn requested from the ViewCube: target (yaw, pitch)
+    view_anim: Option<(f64, f64)>,
 }
+
+/// Default "home" orientation (isometric-like view from the south-east)
+const HOME_YAW: f64 = 0.75;
+const HOME_PITCH: f64 = 0.45;
+const MAX_PITCH: f64 = 1.45;
 
 impl Viewport3D {
     pub fn new() -> Self {
@@ -124,6 +131,7 @@ impl Viewport3D {
             gpu: None,
             cache: None,
             doc_watcher: DocWatcher::default(),
+            view_anim: None,
         }
     }
 
@@ -163,8 +171,8 @@ impl Viewport3D {
         let max_dim = size.x.max(size.y).max(size.z).max(5000.0);
         self.camera.target = center;
         self.camera.distance = (max_dim * 1.5).clamp(2000.0, 150_000.0);
-        self.camera.yaw_rad = 0.75;
-        self.camera.pitch_rad = 0.45;
+        self.camera.yaw_rad = HOME_YAW;
+        self.camera.pitch_rad = HOME_PITCH;
     }
 
     pub fn render(&mut self, ui: &mut Ui, doc: &BimDocument, selected_id: &mut Option<ElementId>) {
@@ -178,7 +186,7 @@ impl Viewport3D {
         let rect = response.rect;
 
         // ViewCube geometry & interactive bounds (Top-Left of 3D Viewport)
-        let cube_center = Pos2::new(rect.min.x + 58.0, rect.min.y + 70.0);
+        let cube_center = Pos2::new(rect.min.x + 58.0, rect.min.y + 88.0);
         let cube_rect = Rect::from_center_size(cube_center, egui::vec2(84.0, 84.0));
         let mouse_pos = ui.input(|i| i.pointer.hover_pos());
         let mouse_over_cube = mouse_pos.map_or(false, |p| cube_rect.contains(p));
@@ -189,16 +197,18 @@ impl Viewport3D {
             let rot_speed = if mouse_over_cube { 0.012 } else { 0.008 };
             self.camera.yaw_rad -= delta.x as f64 * rot_speed;
             self.camera.pitch_rad = (self.camera.pitch_rad + delta.y as f64 * rot_speed)
-                .clamp(-1.45, 1.45);
+                .clamp(-MAX_PITCH, MAX_PITCH);
+            self.view_anim = None;
         } else if response.dragged_by(egui::PointerButton::Middle)
             || response.dragged_by(egui::PointerButton::Secondary)
         {
+            // Grab-style pan in the screen plane: the point under the cursor follows the mouse
             let delta = response.drag_delta();
-            let right = Vector3D::new(-self.camera.yaw_rad.sin(), self.camera.yaw_rad.cos(), 0.0);
-            let up = Vector3D::Z;
-            let pan_speed = self.camera.distance * 0.001;
-            self.camera.target += (right * (-delta.x as f64) + up * (delta.y as f64)) * pan_speed;
+            let (_, _, right, up) = self.camera_basis();
+            let world_per_px = 2.0 * self.camera.distance * (self.camera.fov_y_rad * 0.5).tan() / rect.height().max(1.0) as f64;
+            self.camera.target += (right * (-delta.x as f64) + up * (delta.y as f64)) * world_per_px;
         }
+        self.advance_view_animation(ui.ctx());
 
         // Smooth (animated) wheel zoom plus trackpad pinch zoom
         if response.hovered() {
@@ -220,7 +230,7 @@ impl Viewport3D {
         };
 
         // 7.6 Render Interactive 3D ViewCube (導覽立方體)
-        self.render_viewcube(&painter, cube_center, mouse_pos, response.clicked() && mouse_over_cube);
+        self.render_viewcube(ui.ctx(), &painter, cube_center, mouse_pos, response.clicked() && mouse_over_cube);
 
         // 8. Viewport Top Status HUD & Settings Button
         let hud_rect = Rect::from_min_size(
@@ -326,211 +336,196 @@ impl Viewport3D {
         }
     }
 
-    /// Renders an interactive, rotating 3D ViewCube (導覽立方體) in the top-left of the viewport.
-    /// Each face is labeled (前、後、左、右、上、下), clicks snap to orthogonal views, and dragging rotates the 3D scene.
+    /// Smoothly turns the camera toward the orientation chosen on the ViewCube.
+    fn advance_view_animation(&mut self, ctx: &egui::Context) {
+        let Some((target_yaw, target_pitch)) = self.view_anim else { return };
+        let dt = ctx.input(|i| i.stable_dt.min(0.1)) as f64;
+        let t = 1.0 - (-dt * 11.0).exp();
+        // Shortest way around for yaw
+        let d_yaw = (target_yaw - self.camera.yaw_rad + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+            - std::f64::consts::PI;
+        let d_pitch = target_pitch - self.camera.pitch_rad;
+        if d_yaw.abs() < 1e-3 && d_pitch.abs() < 1e-3 {
+            self.camera.yaw_rad = target_yaw;
+            self.camera.pitch_rad = target_pitch;
+            self.view_anim = None;
+        } else {
+            self.camera.yaw_rad += d_yaw * t;
+            self.camera.pitch_rad += d_pitch * t;
+            ctx.request_repaint();
+        }
+    }
+
+    /// Starts an animated turn so the camera looks at the target from direction `dir`
+    /// (pointing from the target toward the eye).
+    fn look_from(&mut self, dir: Vector3D) {
+        let dir = dir.normalize();
+        let pitch = dir.z.clamp(-1.0, 1.0).asin().clamp(-MAX_PITCH, MAX_PITCH);
+        let yaw = if dir.x.abs() < 1e-6 && dir.y.abs() < 1e-6 {
+            // Straight top / bottom view: keep the current heading, squared to the axes
+            (self.camera.yaw_rad / std::f64::consts::FRAC_PI_2).round() * std::f64::consts::FRAC_PI_2
+        } else {
+            dir.x.atan2(-dir.y)
+        };
+        self.view_anim = Some((yaw, pitch));
+    }
+
+    /// Interactive 3D ViewCube (導覽立方體) in the top-left corner.
+    ///
+    /// Each visible face is split into a 3x3 grid like Autodesk's ViewCube: the centre cell
+    /// turns to that orthographic view (前/後/左/右/上/下), edge cells to the 45° view between two
+    /// faces and corner cells to an isometric view. Dragging over the cube orbits the scene and
+    /// the ⌂ button returns to the home view.
     fn render_viewcube(
         &mut self,
+        ctx: &egui::Context,
         painter: &egui::Painter,
         center: Pos2,
         mouse_pos: Option<Pos2>,
         clicked: bool,
     ) {
-        let cube_radius = 24.0;
-        let eye = self.camera.eye_position();
-        let cam_forward = (self.camera.target - eye).normalize();
-        let cam_right = Vector3D::new(-self.camera.yaw_rad.sin(), self.camera.yaw_rad.cos(), 0.0);
-        let cam_up = cam_right.cross(cam_forward);
+        const SCALE: f32 = 21.0; // screen half-size of the unit cube
+        const BAND: f32 = 0.26; // width of edge / corner cells in face coordinates
+        let (_, forward, right, up) = self.camera_basis();
+        let project = |v: Vector3D| center + egui::vec2(v.dot(right) as f32 * SCALE, -(v.dot(up) as f32) * SCALE);
 
-        // Circular compass backing plate
+        // Compass ring
         painter.circle_filled(center, 38.0, Color32::from_rgba_unmultiplied(22, 26, 34, 185));
         painter.circle_stroke(center, 38.0, Stroke::new(1.0, Color32::from_rgba_unmultiplied(90, 120, 160, 100)));
 
-        // Compass "N" North direction (North is +Y in our architectural WCS)
-        let north_dir = Vector3D::Y;
-        let n_screen_x = center.x + (north_dir.dot(cam_right) * 33.0) as f32;
-        let n_screen_y = center.y - (north_dir.dot(cam_up) * 33.0) as f32;
-        painter.text(
-            Pos2::new(n_screen_x, n_screen_y),
-            egui::Align2::CENTER_CENTER,
-            "N",
-            egui::FontId::monospace(10.0),
-            Color32::from_rgb(255, 80, 80),
-        );
-
-        struct FaceDef {
+        struct Face {
             name: &'static str,
             normal: Vector3D,
-            corners: [Vector3D; 4],
-            target_yaw: f64,
-            target_pitch: f64,
+            u: Vector3D,
+            v: Vector3D,
         }
-
         let faces = [
-            // 上 (Top, +Z)
-            FaceDef {
-                name: "上",
-                normal: Vector3D::Z,
-                corners: [
-                    Vector3D::new(-1.0, -1.0, 1.0),
-                    Vector3D::new(1.0, -1.0, 1.0),
-                    Vector3D::new(1.0, 1.0, 1.0),
-                    Vector3D::new(-1.0, 1.0, 1.0),
-                ],
-                target_yaw: 0.0,
-                target_pitch: 1.45,
-            },
-            // 下 (Bottom, -Z)
-            FaceDef {
-                name: "下",
-                normal: -Vector3D::Z,
-                corners: [
-                    Vector3D::new(-1.0, 1.0, -1.0),
-                    Vector3D::new(1.0, 1.0, -1.0),
-                    Vector3D::new(1.0, -1.0, -1.0),
-                    Vector3D::new(-1.0, -1.0, -1.0),
-                ],
-                target_yaw: 0.0,
-                target_pitch: -1.45,
-            },
-            // 前 (Front, -Y looking North)
-            FaceDef {
-                name: "前",
-                normal: -Vector3D::Y,
-                corners: [
-                    Vector3D::new(-1.0, -1.0, -1.0),
-                    Vector3D::new(1.0, -1.0, -1.0),
-                    Vector3D::new(1.0, -1.0, 1.0),
-                    Vector3D::new(-1.0, -1.0, 1.0),
-                ],
-                target_yaw: 0.0,
-                target_pitch: 0.0,
-            },
-            // 後 (Back, +Y looking South)
-            FaceDef {
-                name: "後",
-                normal: Vector3D::Y,
-                corners: [
-                    Vector3D::new(1.0, 1.0, -1.0),
-                    Vector3D::new(-1.0, 1.0, -1.0),
-                    Vector3D::new(-1.0, 1.0, 1.0),
-                    Vector3D::new(1.0, 1.0, 1.0),
-                ],
-                target_yaw: std::f64::consts::PI,
-                target_pitch: 0.0,
-            },
-            // 左 (Left, -X looking East)
-            FaceDef {
-                name: "左",
-                normal: -Vector3D::X,
-                corners: [
-                    Vector3D::new(-1.0, 1.0, -1.0),
-                    Vector3D::new(-1.0, -1.0, -1.0),
-                    Vector3D::new(-1.0, -1.0, 1.0),
-                    Vector3D::new(-1.0, 1.0, 1.0),
-                ],
-                target_yaw: -std::f64::consts::FRAC_PI_2,
-                target_pitch: 0.0,
-            },
-            // 右 (Right, +X looking West)
-            FaceDef {
-                name: "右",
-                normal: Vector3D::X,
-                corners: [
-                    Vector3D::new(1.0, -1.0, -1.0),
-                    Vector3D::new(1.0, 1.0, -1.0),
-                    Vector3D::new(1.0, 1.0, 1.0),
-                    Vector3D::new(1.0, -1.0, 1.0),
-                ],
-                target_yaw: std::f64::consts::FRAC_PI_2,
-                target_pitch: 0.0,
-            },
+            Face { name: "上", normal: Vector3D::Z, u: Vector3D::X, v: Vector3D::Y },
+            Face { name: "下", normal: -Vector3D::Z, u: Vector3D::X, v: -Vector3D::Y },
+            Face { name: "前", normal: -Vector3D::Y, u: Vector3D::X, v: Vector3D::Z },
+            Face { name: "後", normal: Vector3D::Y, u: -Vector3D::X, v: Vector3D::Z },
+            Face { name: "左", normal: -Vector3D::X, u: -Vector3D::Y, v: Vector3D::Z },
+            Face { name: "右", normal: Vector3D::X, u: Vector3D::Y, v: Vector3D::Z },
         ];
 
-        struct VisFace<'a> {
-            def: &'a FaceDef,
-            depth: f64,
-            points: [Pos2; 4],
-            face_center: Pos2,
-        }
+        // Visible faces, far to near
+        let mut visible: Vec<(&Face, f64)> = faces
+            .iter()
+            .map(|f| (f, f.normal.dot(-forward)))
+            .filter(|(_, facing)| *facing > 0.01)
+            .collect();
+        visible.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-        let mut vis_faces: Vec<VisFace> = Vec::new();
+        // Face-local (u, v) in [0, 1]² of a screen point, for a projected face parallelogram
+        let face_uv = |face: &Face, p: Pos2| -> Option<(f32, f32)> {
+            let p0 = project(face.normal - face.u - face.v);
+            let e1 = project(face.normal + face.u - face.v) - p0;
+            let e2 = project(face.normal - face.u + face.v) - p0;
+            let det = e1.x * e2.y - e1.y * e2.x;
+            if det.abs() < 1.0 {
+                return None;
+            }
+            let d = p - p0;
+            let u = (d.x * e2.y - d.y * e2.x) / det;
+            let v = (e1.x * d.y - e1.y * d.x) / det;
+            ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
+        };
+        let cell_of = |t: f32| if t < BAND { -1i8 } else if t > 1.0 - BAND { 1 } else { 0 };
+        let cell_range = |c: i8| match c {
+            -1 => (0.0, BAND),
+            0 => (BAND, 1.0 - BAND),
+            _ => (1.0 - BAND, 1.0),
+        };
 
-        for face in &faces {
-            let norm_depth = face.normal.dot(-cam_forward);
-            if norm_depth > 0.02 {
-                let pts = face.corners.map(|c| {
-                    let sx = center.x + (c.dot(cam_right) * cube_radius) as f32;
-                    let sy = center.y - (c.dot(cam_up) * cube_radius) as f32;
-                    Pos2::new(sx, sy)
-                });
-                let fc = Pos2::new(
-                    (pts[0].x + pts[1].x + pts[2].x + pts[3].x) * 0.25,
-                    (pts[0].y + pts[1].y + pts[2].y + pts[3].y) * 0.25,
+        // Hovered cell on the nearest face under the cursor
+        let hovered = mouse_pos.and_then(|m| {
+            visible.iter().rev().find_map(|(face, _)| {
+                face_uv(face, m).map(|(u, v)| (face.name, cell_of(u), cell_of(v)))
+            })
+        });
+
+        let light = Vector3D::new(0.6, -0.5, 0.75).normalize();
+        for (face, facing) in &visible {
+            let corners = [
+                face.normal - face.u - face.v,
+                face.normal + face.u - face.v,
+                face.normal + face.u + face.v,
+                face.normal - face.u + face.v,
+            ]
+            .map(project);
+            let shade = (0.78 + 0.22 * face.normal.dot(light)) as f32;
+            let base = Color32::from_rgb((236.0 * shade) as u8, (240.0 * shade) as u8, (247.0 * shade) as u8);
+            painter.add(egui::Shape::convex_polygon(corners.to_vec(), base, Stroke::new(1.2, Color32::from_rgb(78, 92, 112))));
+
+            // Faint 3x3 grid hinting the clickable edge / corner zones
+            let p0 = corners[0];
+            let (e1, e2) = (corners[1] - p0, corners[3] - p0);
+            let grid = Stroke::new(0.6, Color32::from_rgba_unmultiplied(78, 92, 112, 70));
+            for t in [BAND, 1.0 - BAND] {
+                painter.line_segment([p0 + e1 * t, p0 + e1 * t + e2], grid);
+                painter.line_segment([p0 + e2 * t, p0 + e2 * t + e1], grid);
+            }
+
+            if let Some((name, cu, cv)) = hovered {
+                if name == face.name {
+                    let (u0, u1) = cell_range(cu);
+                    let (v0, v1) = cell_range(cv);
+                    let cell = vec![p0 + e1 * u0 + e2 * v0, p0 + e1 * u1 + e2 * v0, p0 + e1 * u1 + e2 * v1, p0 + e1 * u0 + e2 * v1];
+                    painter.add(egui::Shape::convex_polygon(
+                        cell,
+                        Color32::from_rgba_unmultiplied(70, 160, 255, 190),
+                        Stroke::NONE,
+                    ));
+                }
+            }
+
+            // Upright label, fading out as the face turns edge-on
+            if *facing > 0.3 {
+                let face_center = project(face.normal);
+                let alpha = (((*facing - 0.3) / 0.4).clamp(0.0, 1.0) * 255.0) as u8;
+                painter.text(
+                    face_center,
+                    egui::Align2::CENTER_CENTER,
+                    face.name,
+                    egui::FontId::proportional(10.0 + 3.0 * *facing as f32),
+                    Color32::from_rgba_unmultiplied(30, 40, 58, alpha),
                 );
-                vis_faces.push(VisFace {
-                    def: face,
-                    depth: norm_depth,
-                    points: pts,
-                    face_center: fc,
-                });
             }
         }
 
-        // Painter's sort from back to front
-        vis_faces.sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
-
-        // Click detection from front to back
-        let mut clicked_face: Option<&FaceDef> = None;
-        for face in vis_faces.iter().rev() {
-            let is_hovered = mouse_pos.map_or(false, |m| point_in_quad(m, face.points));
-            if is_hovered && clicked && clicked_face.is_none() {
-                clicked_face = Some(face.def);
-            }
-        }
-
-        if let Some(target) = clicked_face {
-            self.camera.yaw_rad = target.target_yaw;
-            self.camera.pitch_rad = target.target_pitch;
-        }
-
-        // Draw cube faces
-        for face in &vis_faces {
-            let is_hovered = mouse_pos.map_or(false, |m| point_in_quad(m, face.points));
-            let fill_color = if is_hovered {
-                Color32::from_rgb(85, 175, 255) // Bright sky blue highlight on hover
-            } else {
-                let light = (0.72 + 0.28 * face.def.normal.dot(Vector3D::new(0.6, -0.5, 0.75).normalize())).clamp(0.45, 1.0) as f32;
-                Color32::from_rgb(
-                    (238.0 * light) as u8,
-                    (242.0 * light) as u8,
-                    (248.0 * light) as u8,
-                )
-            };
-
-            let stroke = Stroke::new(
-                if is_hovered { 1.8 } else { 1.2 },
-                if is_hovered { Color32::from_rgb(255, 255, 255) } else { Color32::from_rgb(80, 95, 115) },
-            );
-
-            painter.add(egui::Shape::convex_polygon(
-                face.points.to_vec(),
-                fill_color,
-                stroke,
-            ));
-
-            let text_color = if is_hovered {
-                Color32::from_rgb(255, 255, 255)
-            } else {
-                Color32::from_rgb(30, 40, 55)
-            };
-
+        // North (+Y) marker on the ring, drawn over the cube so it is never hidden
+        let north = egui::vec2(Vector3D::Y.dot(right) as f32, -(Vector3D::Y.dot(up) as f32));
+        if north.length() > 0.05 {
             painter.text(
-                face.face_center,
+                center + north.normalized() * 33.0,
                 egui::Align2::CENTER_CENTER,
-                face.def.name,
-                egui::FontId::proportional(11.0),
-                text_color,
+                "N",
+                egui::FontId::monospace(10.0),
+                Color32::from_rgb(255, 80, 80),
             );
+        }
+
+        // Home button (⌂): back to the default view
+        let home_center = center + egui::vec2(28.0, -28.0);
+        let home_hovered = mouse_pos.is_some_and(|m| m.distance(home_center) < 9.0);
+        painter.circle_filled(
+            home_center,
+            9.0,
+            if home_hovered { Color32::from_rgb(70, 160, 255) } else { Color32::from_rgb(40, 48, 62) },
+        );
+        painter.text(home_center, egui::Align2::CENTER_CENTER, "⌂", egui::FontId::proportional(12.0), Color32::WHITE);
+
+        if hovered.is_some() || home_hovered {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if clicked {
+            if home_hovered {
+                self.view_anim = Some((HOME_YAW, HOME_PITCH));
+            } else if let Some((name, cu, cv)) = hovered {
+                if let Some(face) = faces.iter().find(|f| f.name == name) {
+                    self.look_from(face.normal + face.u * cu as f64 + face.v * cv as f64);
+                }
+            }
         }
     }
 }
@@ -1054,21 +1049,6 @@ fn ray_triangle(origin: Point3D, dir: Vector3D, v: &[Point3D; 3]) -> Option<f64>
     }
     let t = e2.dot(q) * inv_det;
     (t > NEAR_PLANE_MM).then_some(t)
-}
-
-/// Helper: 2D Point-in-Convex-Quad test using cross-product signs
-fn point_in_quad(p: Pos2, q: [Pos2; 4]) -> bool {
-    let sign = |p1: Pos2, p2: Pos2, p3: Pos2| -> f32 {
-        (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
-    };
-    let d1 = sign(p, q[0], q[1]);
-    let d2 = sign(p, q[1], q[2]);
-    let d3 = sign(p, q[2], q[3]);
-    let d4 = sign(p, q[3], q[0]);
-
-    let has_neg = (d1 < -0.01) || (d2 < -0.01) || (d3 < -0.01) || (d4 < -0.01);
-    let has_pos = (d1 > 0.01) || (d2 > 0.01) || (d3 > 0.01) || (d4 > 0.01);
-    !(has_neg && has_pos)
 }
 
 /// Helper: 2D Point-in-Triangle test using cross-product signs
