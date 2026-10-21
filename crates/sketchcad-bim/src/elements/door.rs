@@ -21,6 +21,43 @@ pub enum DoorSwing {
     OutwardRight,
 }
 
+impl DoorSwing {
+    pub const ALL: [DoorSwing; 4] = [
+        DoorSwing::InwardLeft,
+        DoorSwing::InwardRight,
+        DoorSwing::OutwardLeft,
+        DoorSwing::OutwardRight,
+    ];
+
+    /// Hinge at the start of the opening (left, seen along the wall direction)
+    pub fn is_left(self) -> bool {
+        matches!(self, DoorSwing::InwardLeft | DoorSwing::OutwardLeft)
+    }
+
+    /// Leaf opens toward the wall's left-hand normal side
+    pub fn is_inward(self) -> bool {
+        matches!(self, DoorSwing::InwardLeft | DoorSwing::InwardRight)
+    }
+
+    pub fn from_parts(left: bool, inward: bool) -> Self {
+        match (left, inward) {
+            (true, true) => DoorSwing::InwardLeft,
+            (false, true) => DoorSwing::InwardRight,
+            (true, false) => DoorSwing::OutwardLeft,
+            (false, false) => DoorSwing::OutwardRight,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DoorSwing::InwardLeft => "左開・內開",
+            DoorSwing::InwardRight => "右開・內開",
+            DoorSwing::OutwardLeft => "左開・外開",
+            DoorSwing::OutwardRight => "右開・外開",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Door {
     pub id: ElementId,
@@ -96,13 +133,18 @@ impl BimElement for Door {
         };
         let norm = Vector2D::new(-dir.y, dir.x);
 
+        // Hinge at the opening start (left) or end (right); leaf swings to the normal side
+        // (inward) or the opposite side (outward)
+        let start = self.world_pos;
+        let end = start + dir * self.width;
+        let (hinge, along) = if self.swing.is_left() { (start, dir) } else { (end, -dir) };
+        let side = if self.swing.is_inward() { norm } else { -norm };
+
         // 1. Threshold line
-        let hinge = self.world_pos;
-        let frame_end = hinge + dir * self.width;
-        primitives.push(Polyline2D::new(vec![hinge, frame_end], false));
+        primitives.push(Polyline2D::new(vec![start, end], false));
 
         // 2. Leaf line (open at 90 degrees)
-        let leaf_end = hinge + norm * self.width;
+        let leaf_end = hinge + side * self.width;
         primitives.push(Polyline2D::new(vec![hinge, leaf_end], false));
 
         // 3. Swing Arc (approximated with 16 segments)
@@ -110,7 +152,7 @@ impl BimElement for Door {
         let mut arc_verts = Vec::with_capacity(segments + 1);
         for i in 0..=segments {
             let theta = (std::f64::consts::PI * 0.5) * (i as f64 / segments as f64);
-            let pt = hinge + dir * (self.width * theta.cos()) + norm * (self.width * theta.sin());
+            let pt = hinge + along * (self.width * theta.cos()) + side * (self.width * theta.sin());
             arc_verts.push(pt);
         }
         primitives.push(Polyline2D::new(arc_verts, false));
@@ -189,5 +231,29 @@ impl BimElement for Door {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf_end(swing: DoorSwing) -> Point2D {
+        let mut door = Door::new(ElementId::new(), 0.0, 900.0, 2100.0, Material::wood(), 0.0);
+        door.set_transform(Point2D::new(1000.0, 0.0), Vector2D::X);
+        door.swing = swing;
+        door.to_2d_primitives()[1].vertices[1]
+    }
+
+    #[test]
+    fn swing_moves_hinge_and_leaf_side() {
+        // Wall along +X, opening from x=1000 to x=1900, inward = +Y
+        assert_eq!(leaf_end(DoorSwing::InwardLeft), Point2D::new(1000.0, 900.0));
+        assert_eq!(leaf_end(DoorSwing::InwardRight), Point2D::new(1900.0, 900.0));
+        assert_eq!(leaf_end(DoorSwing::OutwardLeft), Point2D::new(1000.0, -900.0));
+        assert_eq!(leaf_end(DoorSwing::OutwardRight), Point2D::new(1900.0, -900.0));
+        for swing in DoorSwing::ALL {
+            assert_eq!(DoorSwing::from_parts(swing.is_left(), swing.is_inward()), swing);
+        }
     }
 }

@@ -2,7 +2,7 @@ use crate::gui::doc_watch::DocWatcher;
 use crate::gui::plan_sheets::{build_plan_set, LineStyle, PlanSet};
 use egui::{Color32, Pos2, Rect, Stroke, Ui};
 use sketchcad_bim::{
-    BimDocument, ElementKind, FurnitureKind, LightType, SpaceType, Wall,
+    BimDocument, DoorSwing, ElementKind, FurnitureKind, LightType, SpaceType, Wall,
 };
 use sketchcad_core::{ElementId, Point2D, Vector2D};
 use sketchcad_render::Camera2D;
@@ -392,6 +392,13 @@ impl Viewport2D {
         // 5e. Sheet selector bar (圖紙切換列) and zoom / pan controls
         self.render_sheet_bar(ui, rect);
         self.render_nav_controls(ui, rect, center);
+
+        // 5f. Door swing picker (左開 / 右開 · 內開 / 外開) next to the selected door
+        if !tiled {
+            if let Some(id) = *selected_id {
+                render_door_swing_popup(ui, rect, &to_screen, doc, id, undo_stack, status_msg);
+            }
+        }
 
         // Double-click a tiled sheet to open it for editing
         if tiled && response.double_clicked() {
@@ -1533,7 +1540,7 @@ impl Viewport2D {
                         if button(ui, "－", "縮小 (- / 滾輪向下)") {
                             action = Some(1);
                         }
-                        if button(ui, "⤢", "全圖 (0 / Home)") {
+                        if button(ui, "全圖", "顯示整張圖面 (0 / Home)") {
                             action = Some(2);
                         }
                         let hand = ui
@@ -2092,6 +2099,72 @@ pub fn pick_closest_element(doc: &BimDocument, world_pt: Point2D) -> Option<Elem
     }
 
     closest_id
+}
+
+/// Floating picker shown above a selected door to flip its hinge side and swing side.
+fn render_door_swing_popup(
+    ui: &Ui,
+    rect: Rect,
+    to_screen: &impl Fn(Point2D) -> Pos2,
+    doc: &mut BimDocument,
+    id: ElementId,
+    undo_stack: &mut Vec<BimDocument>,
+    status_msg: &mut String,
+) {
+    let Some(door) = doc.get_door(id) else { return };
+    let dir = if door.wall_dir.length_squared() > 1e-6 { door.wall_dir.normalize() } else { Vector2D::X };
+    let norm = Vector2D::new(-dir.y, dir.x);
+    let side = if door.swing.is_inward() { norm } else { -norm };
+    let threshold_mid = door.world_pos + dir * (door.width * 0.5);
+    let anchor = to_screen(threshold_mid);
+    if !rect.contains(anchor) {
+        return;
+    }
+    let current = door.swing;
+    // Place the picker on the wall side opposite the swing so it never covers the arc
+    let swing_screen = to_screen(threshold_mid + side * door.width) - anchor;
+    let opens_upward = swing_screen.y < 0.0;
+    let (pivot, y) = if opens_upward {
+        (egui::Align2::CENTER_TOP, anchor.y + 22.0)
+    } else {
+        (egui::Align2::CENTER_BOTTOM, anchor.y - 22.0)
+    };
+    let pos = Pos2::new(
+        anchor.x.clamp(rect.left() + 150.0, rect.right() - 150.0),
+        y.clamp(rect.top() + 70.0, rect.bottom() - 50.0),
+    );
+
+    let mut chosen = None;
+    egui::Area::new(egui::Id::new("door_swing_popup"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .pivot(pivot)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("開門方向").small().strong());
+                    ui.separator();
+                    let mut pick = |ui: &mut Ui, text: &str, tip: &str, swing: DoorSwing| {
+                        if ui.selectable_label(current == swing, text).on_hover_text(tip).clicked() && swing != current {
+                            chosen = Some(swing);
+                        }
+                    };
+                    pick(ui, "左開", "鉸鍊在左側", DoorSwing::from_parts(true, current.is_inward()));
+                    pick(ui, "右開", "鉸鍊在右側", DoorSwing::from_parts(false, current.is_inward()));
+                    ui.separator();
+                    pick(ui, "內開", "門扇往室內側開啟", DoorSwing::from_parts(current.is_left(), true));
+                    pick(ui, "外開", "門扇往室外側開啟", DoorSwing::from_parts(current.is_left(), false));
+                });
+            });
+        });
+
+    if let Some(swing) = chosen {
+        push_undo(undo_stack, doc);
+        if let Some(door) = doc.get_door_mut(id) {
+            door.swing = swing;
+            *status_msg = format!("✔ 已設定開門方向：{}", swing.label());
+        }
+    }
 }
 
 /// Screen line weight / color per drafting line category (dark CAD background).

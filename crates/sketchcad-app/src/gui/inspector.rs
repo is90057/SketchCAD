@@ -435,6 +435,14 @@ fn render_element_tree_node(
                             needs_sync = true;
                         }
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("開向:");
+                        for swing in sketchcad_bim::DoorSwing::ALL {
+                            if ui.selectable_value(&mut door.swing, swing, swing.label()).changed() {
+                                needs_sync = true;
+                            }
+                        }
+                    });
                 } else if let Some(win) = doc.get_window_mut(id) {
                     ui.horizontal(|ui| {
                         ui.label("窗寬:");
@@ -869,6 +877,17 @@ fn render_selected_element_properties(
                     if ui.add(egui::DragValue::new(&mut door.height).speed(10.0).range(1500.0..=3200.0).suffix(" mm")).changed() {
                         needs_sync = true;
                     }
+                });
+                vs_property_row(ui, "開門方向 (Swing)", "左開/右開：鉸鍊位於門洞起點或終點；內開/外開：門扇朝牆的哪一側開啟。", state, |ui| {
+                    egui::ComboBox::from_id_salt("door_swing")
+                        .selected_text(door.swing.label())
+                        .show_ui(ui, |ui| {
+                            for swing in sketchcad_bim::DoorSwing::ALL {
+                                if ui.selectable_value(&mut door.swing, swing, swing.label()).changed() {
+                                    needs_sync = true;
+                                }
+                            }
+                        });
                 });
             } else if let Some(win) = doc.get_window_mut(id) {
                 vs_property_row(ui, "窗框寬度 (Width)", "氣密防風窗之水平總開窗寬度 (mm)。", state, |ui| {
