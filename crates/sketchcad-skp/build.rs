@@ -4,9 +4,9 @@
 use std::path::Path;
 
 const OPENSKP_SOURCES: &[&str] = &[
-    "core", "create", "earcut", "edit", "errors", "face_groups", "geometry", "legacy", "model",
-    "observability", "pages_dimensions", "parser", "scene", "tlv", "transforms", "triangulator",
-    "vff",
+    "core", "create", "earcut", "edit", "errors", "face_groups", "geometry", "instanced_scene",
+    "legacy", "model", "observability", "pages_dimensions", "parser", "scene", "tlv", "transforms",
+    "triangulator", "vff",
 ];
 const MINIZ_SOURCES: &[&str] = &["miniz", "miniz_tdef", "miniz_tinfl", "miniz_zip"];
 

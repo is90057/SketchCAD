@@ -1,4 +1,5 @@
-#include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 
 #include "internal.hpp"
@@ -6,10 +7,15 @@
 namespace openskp {
 namespace {
 
+// SketchCAD patch: upstream uses std::to_chars(double), which Apple's libc++
+// only provides from macOS 13.3. Emit the shortest %g form that round-trips.
 std::string format_double(double v) {
   char buf[32];
-  auto result = std::to_chars(buf, buf + sizeof(buf), v);
-  return std::string(buf, result.ptr);
+  for (int precision = 1; precision <= 17; ++precision) {
+    std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
+    if (std::strtod(buf, nullptr) == v) break;
+  }
+  return std::string(buf);
 }
 
 }  // namespace
