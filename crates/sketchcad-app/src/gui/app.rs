@@ -8,7 +8,7 @@ use sketchcad_bim::{
 };
 use sketchcad_core::{ElementId, Point2D, Point3D};
 use sketchcad_geom::OpeningVoid;
-use sketchcad_io::{BcfHandler, BcfTopic, DwgAdapter, DxfHandler, IfcExporter, IfcImporter};
+use sketchcad_io::{BcfHandler, BcfTopic, DwgAdapter, DxfHandler, IfcExporter, IfcImporter, SkpExporter, SkpImporter};
 use crate::updater::{self, UpdateState, Updater};
 use std::path::Path;
 
@@ -34,6 +34,7 @@ pub enum ExportFormat {
     Dxf,
     Bcf,
     Skc,
+    Skp,
 }
 
 pub struct SketchCadApp {
@@ -417,10 +418,11 @@ impl SketchCadApp {
         let file = rfd::FileDialog::new()
             .set_title("開啟工程檔案")
             .add_filter(
-                "CAD & BIM 工程檔案 (*.dxf, *.ifc, *.dwg, *.bcf, *.bcfzip, *.skc)",
-                &["dxf", "ifc", "dwg", "bcf", "bcfzip", "skc"],
+                "CAD & BIM 工程檔案 (*.dxf, *.ifc, *.dwg, *.skp, *.bcf, *.bcfzip, *.skc)",
+                &["dxf", "ifc", "dwg", "skp", "bcf", "bcfzip", "skc"],
             )
             .add_filter("OpenBIM IFC4 模型 (*.ifc)", &["ifc"])
+            .add_filter("SketchUp 模型 (*.skp)", &["skp"])
             .add_filter("AutoCAD DXF 圖檔 (*.dxf)", &["dxf"])
             .add_filter("AutoCAD DWG 圖檔 (*.dwg)", &["dwg"])
             .add_filter("BIM 協同議題封包 (*.bcf, *.bcfzip)", &["bcf", "bcfzip"])
@@ -458,6 +460,7 @@ impl SketchCadApp {
             ExportFormat::Dxf => ("AutoCAD DXF 圖檔 (*.dxf)", "dxf"),
             ExportFormat::Bcf => ("BIM 協同議題封包 (*.bcfzip)", "bcfzip"),
             ExportFormat::Skc => ("SketchCAD 原生專案 (*.skc)", "skc"),
+            ExportFormat::Skp => ("SketchUp 模型 (*.skp)", "skp"),
         };
         let default_name = format!("project_export.{}", ext);
         let file = rfd::FileDialog::new()
@@ -527,6 +530,23 @@ impl SketchCadApp {
                     }
                     Err(e) => {
                         self.show_notify(format!("開啟 IFC 失敗: {}", e));
+                    }
+                }
+            }
+            "skp" => {
+                match SkpImporter::import_from_file(path) {
+                    Ok(imported_doc) => {
+                        let count = imported_doc.element_count();
+                        self.save_undo_state();
+                        self.doc = imported_doc;
+                        self.selected_id = None;
+                        self.project_file_path = None;
+                        self.viewport_3d.frame_document(&self.doc);
+                        self.viewport_2d.frame_document(&self.doc);
+                        self.show_notify(format!("成功開啟 SketchUp 模型！載入 {} 個物件", count));
+                    }
+                    Err(e) => {
+                        self.show_notify(format!("開啟 SketchUp 檔案失敗: {}", e));
                     }
                 }
             }
@@ -625,6 +645,21 @@ impl SketchCadApp {
                     Err(e) => self.show_notify(format!("匯出專案失敗: {}", e)),
                 }
             }
+            ExportFormat::Skp => match SkpExporter::export_to_skp(&self.doc, path) {
+                Ok(report) if report.skipped_faces > 0 => self.show_notify(format!(
+                    "已匯出 SketchUp 模型至: {}（{} 個群組；{} 個無法表示的面已略過）",
+                    path.display(),
+                    report.groups,
+                    report.skipped_faces
+                )),
+                Ok(report) => self.show_notify(format!(
+                    "成功匯出 SketchUp 模型至: {}（{} 個群組、{} 個面）",
+                    path.display(),
+                    report.groups,
+                    report.faces
+                )),
+                Err(e) => self.show_notify(format!("匯出 SketchUp 失敗: {}", e)),
+            },
         }
     }
 
@@ -859,6 +894,10 @@ impl SketchCadApp {
 
                         ui.radio_value(&mut self.export_format, ExportFormat::Skc, "💾 SketchCAD 原生工程專案 (*.skc)");
                         ui.label(egui::RichText::new("    完整保存所有參數化構件、材質紋理、圖層可見度與工程量估驗清單").small().color(egui::Color32::from_rgb(160, 175, 195)));
+                        ui.add_space(4.0);
+
+                        ui.radio_value(&mut self.export_format, ExportFormat::Skp, "🧊 SketchUp 3D 模型 (*.skp)");
+                        ui.label(egui::RichText::new("    每個構件匯出為群組並依類別分標籤 (Tag)，共平面三角形合併為完整面；可由 SketchUp 2013 以上開啟").small().color(egui::Color32::from_rgb(160, 175, 195)));
 
                         if prev_format != self.export_format {
                             let ext = match self.export_format {
@@ -866,6 +905,7 @@ impl SketchCadApp {
                                 ExportFormat::Dxf => "dxf",
                                 ExportFormat::Bcf => "bcfzip",
                                 ExportFormat::Skc => "skc",
+                                ExportFormat::Skp => "skp",
                             };
                             self.export_path_buffer = format!("exports/project_export.{}", ext);
                         }

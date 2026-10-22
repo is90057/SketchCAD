@@ -18,6 +18,9 @@ pub struct IfcComponent {
     pub base_z: f64,
     pub volume_m3: f64,
     pub area_m2: f64,
+    /// Colour from the source model (SketchUp material); `None` = palette colour for `kind`
+    #[serde(default)]
+    pub display_color: Option<[u8; 4]>,
 }
 
 impl IfcComponent {
@@ -53,11 +56,17 @@ impl IfcComponent {
             base_z,
             volume_m3,
             area_m2,
+            display_color: None,
         }
     }
 
     pub fn with_id(mut self, id: ElementId) -> Self {
         self.id = id;
+        self
+    }
+
+    pub fn with_display_color(mut self, rgba: [u8; 4]) -> Self {
+        self.display_color = Some(rgba);
         self
     }
 
@@ -86,6 +95,10 @@ impl BimElement for IfcComponent {
 
     fn to_3d_mesh(&self) -> TriangleMesh {
         self.mesh.clone()
+    }
+
+    fn display_color(&self) -> Option<[u8; 4]> {
+        self.display_color
     }
 
     fn calculate_qto(&self) -> QuantityTakeoff {

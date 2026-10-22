@@ -8,6 +8,7 @@ license.workspace = true
 sketchcad-core = { path = "../sketchcad-core" }
 sketchcad-geom = { path = "../sketchcad-geom" }
 sketchcad-bim = { path = "../sketchcad-bim" }
+sketchcad-skp = { path = "../sketchcad-skp" }
 glam.workspace = true
 dxf.workspace = true
 quick-xml.workspace = true

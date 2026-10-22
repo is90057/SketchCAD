@@ -174,7 +174,7 @@ impl Viewport3D {
         );
         let center = (f_min + f_max) * 0.5;
         let size = f_max - f_min;
-        let max_dim = size.x.max(size.y).max(size.z).max(5000.0);
+        let max_dim = size.x.max(size.y).max(size.z).max(1500.0);
         self.camera.target = center;
         self.camera.distance = (max_dim * 1.5).clamp(2000.0, 150_000.0);
         self.camera.yaw_rad = HOME_YAW;
@@ -664,7 +664,7 @@ impl Viewport3D {
 
             let mut mesh = elem.to_3d_mesh();
             mesh.compute_crease_edges(CREASE_ANGLE_DEG.to_radians());
-            let material = material_for(kind, &self.settings);
+            let material = element_material(elem, &self.settings);
 
             // Each feature edge is shared by two triangles; draw it only once.
             let quantize = |p: Point3D| ((p.x * 10.0).round() as i64, (p.y * 10.0).round() as i64, (p.z * 10.0).round() as i64);
@@ -937,7 +937,7 @@ impl Viewport3D {
             let kind = elem.kind();
             let mut mesh = elem.to_3d_mesh();
             mesh.compute_crease_edges(CREASE_ANGLE_DEG.to_radians());
-            let material = material_for(kind, &self.settings);
+            let material = element_material(elem, &self.settings);
             if let Some(b) = mesh.bbox() {
                 bounds = Some(bounds.map_or((b.min, b.max), |(lo, hi)| (lo.min(b.min), hi.max(b.max))));
             }
@@ -1017,33 +1017,22 @@ impl Viewport3D {
     }
 }
 
+/// Material of an element: its own source-model colour when it has one (imported SketchUp
+/// geometry), otherwise the palette colour of its kind.
+fn element_material(elem: &dyn sketchcad_bim::BimElement, settings: &Viewport3DSettings) -> ([u8; 3], bool, u8) {
+    match elem.display_color() {
+        Some([r, g, b, a]) => ([r, g, b], a < 255, a),
+        None => material_for(elem.kind(), settings),
+    }
+}
+
 /// Architectural material palette: (base sRGB, translucent, alpha).
 fn material_for(kind: ElementKind, settings: &Viewport3DSettings) -> ([u8; 3], bool, u8) {
-    match kind {
-        ElementKind::Stairs => ([215, 160, 95], false, 255),
-        ElementKind::Railing => ([210, 220, 235], true, 180),
-        ElementKind::Wall => ([235, 235, 230], false, 255),
-        ElementKind::Column => ([165, 175, 185], false, 255),
-        ElementKind::Beam => ([95, 115, 135], false, 255),
-        ElementKind::Slab => ([190, 195, 200], false, 255),
-        ElementKind::Ceiling => {
-            if settings.transparent_ceiling {
-                ([230, 240, 250], true, 60)
-            } else {
-                ([245, 245, 240], false, 255)
-            }
-        }
-        ElementKind::Door => ([175, 115, 65], false, 255),
-        ElementKind::Window => ([135, 210, 245], true, 130),
-        ElementKind::Roof => ([200, 95, 70], false, 255),
-        ElementKind::Ramp => ([175, 180, 190], false, 255),
-        ElementKind::CurtainWall => ([120, 205, 240], true, 140),
-        ElementKind::CurtainGrid => ([100, 180, 220], true, 120),
-        ElementKind::Mullion => ([70, 75, 85], false, 255),
-        ElementKind::Space => ([200, 225, 240], true, 80), // Translucent floor finish plate
-        ElementKind::Furniture => ([165, 125, 85], false, 255), // Warm solid wood / upholstery
-        ElementKind::LightFixture => ([48, 52, 58], false, 255), // Luminaire hardware (chassis / trim)
+    if kind == ElementKind::Ceiling && !settings.transparent_ceiling {
+        return ([245, 245, 240], false, 255);
     }
+    let [r, g, b, a] = kind.display_rgba();
+    ([r, g, b], a < 255, a)
 }
 
 /// Fill and edge colors of one triangle for the active shading mode (world-fixed sun light).

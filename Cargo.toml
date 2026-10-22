@@ -6,6 +6,7 @@ members = [
     "crates/sketchcad-bim",
     "crates/sketchcad-io",
     "crates/sketchcad-render",
+    "crates/sketchcad-skp",
     "crates/sketchcad-app",
 ]
 

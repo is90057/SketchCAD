@@ -120,6 +120,7 @@ solid mesh and an automatic quantity take-off (QTO):
 | **IFC4 (.ifc)** | **Import & export** | ISO-10303-21 STEP. Round-trips `IFCWALL`, `IFCDOOR`, `IFCWINDOW`, `IFCCOLUMN`, `IFCBEAM`, `IFCSLAB`, `IFCCOVERING` and `IFCSTAIR` with 22-character IFC GUIDs. Building storeys become floor-plan sheets. |
 | **DXF (.dxf)** | **Export & open** | Standard vector entities (LINE, LWPOLYLINE), converted into editable smart BIM walls on open. |
 | **DWG (.dwg)** | **Native binary reader** | Pure-Rust bit-stream decoder. 2D CAD plan entities become 3D BIM elements on open. |
+| **SketchUp (.skp)** | **Import & export** | Via the bundled [OpenSKP](https://github.com/iamahsanmehmood/openskp) library, no SketchUp install needed. Opens SketchUp 2013+ files (legacy and 2021+ formats) with their material colours; element kinds are guessed from component / tag names. Exports each element as a group on a per-kind tag, with coplanar triangles merged back into real faces (with holes); the output opens in SketchUp 2013 and later. |
 | **BCF 2.1 (.bcf / .bcfzip)** | **Export & open** | BIM collaboration issues with viewpoints, status tracking and element references. |
 
 ---
@@ -134,6 +135,7 @@ SketchCAD/
 │   ├── sketchcad-bim/       # Smart elements, storeys, material library, quantity take-off (QTO)
 │   ├── sketchcad-io/        # DXF, DWG, IFC4 STEP import/export, BCF packages
 │   ├── sketchcad-render/    # 2D drafting camera and 3D orbit camera transforms
+│   ├── sketchcad-skp/       # SketchUp .skp read / write (vendored OpenSKP C++ via a C shim)
 │   └── sketchcad-app/       # Desktop app (eframe + egui + wgpu) and CLI pipeline
 ├── samples/                 # Sample DWG / DXF / IFC / BCF / SKC files
 ├── exports/                 # Output of export runs (.dxf, .ifc, .bcfzip)
@@ -207,3 +209,13 @@ cargo run -p sketchcad-app -- --cli
 ## 📄 License
 
 SketchCAD is dual-licensed under **MIT**.
+
+### Third-party code
+
+`crates/sketchcad-skp/vendor/` bundles, unmodified apart from leaving out unused exporters:
+
+* [OpenSKP](https://github.com/iamahsanmehmood/openskp) (C++ edition), MIT, © Ahsan Mehmood.
+  An independent, reverse-engineered implementation, not affiliated with Trimble or SketchUp.
+* [miniz](https://github.com/richgel999/miniz), MIT.
+
+Building SketchCAD therefore needs a C++17 compiler (Xcode command-line tools, MSVC or GCC/Clang).

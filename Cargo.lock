@@ -3173,6 +3173,7 @@ dependencies = [
  "sketchcad-bim",
  "sketchcad-core",
  "sketchcad-geom",
+ "sketchcad-skp",
  "thiserror 1.0.69",
  "uuid",
  "zip",
@@ -3186,6 +3187,13 @@ dependencies = [
  "serde",
  "sketchcad-core",
  "sketchcad-geom",
+]
+
+[[package]]
+name = "sketchcad-skp"
+version = "0.4.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

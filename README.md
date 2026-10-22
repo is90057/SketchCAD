@@ -93,6 +93,7 @@
 | **IFC4 (.ifc)** | **匯出 & 匯入雙向支援** | 遵循 ISO-10303-21 STEP 規範，雙向還原 `IFCWALL`、`IFCDOOR`、`IFCWINDOW`、`IFCCOLUMN`、`IFCBEAM`、`IFCSLAB`、`IFCCOVERING`、`IFCSTAIR`，具備 22 字元 IFC GUID 雙向還原能力。 |
 | **DXF (.dxf)** | **匯出 & 開啟圖檔** | 支援標準 DXF 向量工程圖元（LINE, LWPOLYLINE），開啟時自動轉換為可編輯之智慧 BIM 牆體。 |
 | **DWG (.dwg)** | **原生二進制解碼** | 純 Rust 位元流直接讀取，開啟時自動將 2D CAD 平面圖元轉換為 3D BIM 構件。 |
+| **SketchUp (.skp)** | **開啟 & 匯出** | 內建 [OpenSKP](https://github.com/iamahsanmehmood/openskp)，不需安裝 SketchUp。可開啟 SketchUp 2013 以上（含 2021+ 新格式）並保留材質顏色，依元件／標籤名稱自動判斷構件類別；匯出時每個構件為一個群組並依類別分標籤，共平面三角形合併回完整的面（含開口），可由 SketchUp 2013 以上開啟。 |
 | **BCF 2.1 (.bcf/.bcfzip)** | **匯出 & 開啟封包** | BIM 協同議題標準（.bcf / .bcfzip），支援議題檢討、視角導航、狀態管理與構件關聯。 |
 
 ---
@@ -109,6 +110,7 @@ SketchCAD/
 │   ├── sketchcad-bim/       # 智慧構件(Wall/Door/Window/Col/Beam/Slab/Ceiling/Stairs)、材質庫、工程算量(QTO)
 │   ├── sketchcad-io/        # DXF、DWG、IFC4 STEP 解析與匯出、BCF 協同壓縮包
 │   ├── sketchcad-render/    # 2D CAD 與 3D 軌道旋轉相機視口(Camera)座標變換
+│   ├── sketchcad-skp/       # SketchUp .skp 讀寫（內含 OpenSKP C++ 原始碼與 C 介面轉接層）
 │   └── sketchcad-app/       # 整合應用程式入口與端到端驗證展示
 ├── exports/                 # 測試產出之 .dxf, .ifc, .bcfzip 檔案目錄
 └── Cargo.toml               # 工作區虛擬清單 (Virtual Manifest)
@@ -168,3 +170,12 @@ cargo run -p sketchcad-app -- --cli
 ## 📄 授權條款 (License)
 
 本專案採用 **MIT** 雙重授權條款。詳見專案目錄下授權文件。
+
+### 第三方程式碼
+
+`crates/sketchcad-skp/vendor/` 內含以下開源程式碼（僅移除未使用的匯出器，其餘未修改）：
+
+* [OpenSKP](https://github.com/iamahsanmehmood/openskp)（C++ 版），MIT 授權，© Ahsan Mehmood。以逆向工程實作，與 Trimble／SketchUp 無關。
+* [miniz](https://github.com/richgel999/miniz)，MIT 授權。
+
+因此編譯 SketchCAD 需要 C++17 編譯器（macOS 的 Xcode Command Line Tools、Windows 的 MSVC，或 GCC/Clang）。
