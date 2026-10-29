@@ -129,6 +129,8 @@ pub struct ModelBrowserState {
     path: Option<PathBuf>,
     pending: Option<PendingImport>,
     editing: Option<ModelEdit>,
+    /// `.blend` file being converted by Blender in the background
+    converting: Option<(String, std::sync::mpsc::Receiver<Result<TriangleMesh, String>>)>,
 }
 
 impl ModelBrowserState {
@@ -251,6 +253,7 @@ impl SketchCadApp {
         let selected = self.viewport_2d.model_id.clone();
         let has_selection = self.selected_id.is_some_and(|id| self.doc.get_element(id).is_some());
         let models = all_models();
+        self.poll_blend_conversion(ctx);
 
         egui::Window::new("📦 3D 模型百寶箱 (Model Library)")
             .open(&mut open)
@@ -260,6 +263,16 @@ impl SketchCadApp {
             .collapsible(true)
             .show(ctx, |ui| {
                 let state = &mut self.model_browser;
+                if let Some((source, _)) = &state.converting {
+                    ui.add_space(20.0);
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                        ui.label(format!("正在以 Blender 轉換 {source} …"));
+                        ui.label(egui::RichText::new("大型場景可能需要數十秒").small().weak());
+                    });
+                    ui.add_space(20.0);
+                    return;
+                }
                 if let Some(pending) = &mut state.pending {
                     import_panel_ui(ui, pending, &mut actions);
                     return;
@@ -312,7 +325,11 @@ impl SketchCadApp {
 
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("📥 匯入模型...").on_hover_text("匯入 OBJ、SketchUp (.skp) 或 SketchCAD 模型包 (.skmodel)").clicked() {
+                    if ui
+                        .button("📥 匯入模型...")
+                        .on_hover_text("匯入 OBJ、FBX、Blender (.blend)、SketchUp (.skp) 或 SketchCAD 模型包 (.skmodel)")
+                        .clicked()
+                    {
                         actions.push(BrowserAction::Import);
                     }
                     if ui
@@ -445,6 +462,30 @@ impl SketchCadApp {
         }
     }
 
+    /// Picks up the result of a background Blender conversion.
+    fn poll_blend_conversion(&mut self, ctx: &egui::Context) {
+        let Some((source, rx)) = &self.model_browser.converting else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                let source = source.clone();
+                self.model_browser.converting = None;
+                match result {
+                    // Blender's OBJ export is in metres with Y up
+                    Ok(mesh) => {
+                        let name = source.trim_end_matches(".blend").to_string();
+                        self.model_browser.pending = Some(PendingImport::new(source, name, mesh, ImportUnit::Metre, true));
+                    }
+                    Err(e) => self.show_notify(format!("無法匯入 Blender 檔案: {e}")),
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.model_browser.converting = None;
+                self.show_notify("Blender 轉換意外中止");
+            }
+        }
+    }
+
     fn persist_models(&mut self, success: String) {
         match self.model_browser.persist() {
             Ok(()) => self.show_notify(success),
@@ -455,8 +496,10 @@ impl SketchCadApp {
     fn import_model_file(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_title("匯入模型至百寶箱")
-            .add_filter("3D 模型 (*.obj, *.skp, *.skmodel)", &["obj", "skp", "skmodel"])
+            .add_filter("3D 模型 (*.obj, *.fbx, *.blend, *.skp, *.skmodel)", &["obj", "fbx", "blend", "skp", "skmodel"])
             .add_filter("Wavefront OBJ (*.obj)", &["obj"])
+            .add_filter("Autodesk FBX (*.fbx)", &["fbx"])
+            .add_filter("Blender (*.blend)", &["blend"])
             .add_filter("SketchUp 模型 (*.skp)", &["skp"])
             .add_filter("SketchCAD 模型包 (*.skmodel)", &["skmodel"])
             .pick_file()
@@ -504,7 +547,30 @@ impl SketchCadApp {
                 }
                 Err(e) => self.show_notify(format!("無法匯入 SketchUp 模型: {e}")),
             },
-            _ => self.show_notify("不支援的模型格式，請選擇 .obj、.skp 或 .skmodel"),
+            "fbx" => match sketchcad_io::read_fbx(&path) {
+                // FBX carries its own units; the reader returns millimetres
+                Ok(import) => {
+                    self.model_browser.pending =
+                        Some(PendingImport::new(source, file_stem(&path), import.mesh, ImportUnit::Millimetre, import.y_up));
+                }
+                Err(e) => self.show_notify(format!("無法匯入 FBX: {e}")),
+            },
+            "blend" => {
+                if sketchcad_io::find_blender().is_none() {
+                    self.show_notify(sketchcad_io::BlendError::BlenderNotFound.to_string());
+                    return;
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let ctx = self.model_browser_ctx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(sketchcad_io::read_blend(&path).map_err(|e| e.to_string()));
+                    if let Some(ctx) = ctx {
+                        ctx.request_repaint();
+                    }
+                });
+                self.model_browser.converting = Some((source, rx));
+            }
+            _ => self.show_notify("不支援的模型格式，請選擇 .obj、.fbx、.blend、.skp 或 .skmodel"),
         }
     }
 }

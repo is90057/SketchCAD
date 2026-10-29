@@ -14,6 +14,16 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::project::{element_to_serializable, PaintedElement, SketchCadProject};
 
+/// Placement of a freely positioned object: plan position of its footprint centre, base
+/// height, rotation (the front faces local −Y) and overall (width, depth, height) in mm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ElementPlacement {
+    pub position: sketchcad_core::Point2D,
+    pub base_z: f64,
+    pub rotation_deg: f64,
+    pub size: (f64, f64, f64),
+}
+
 /// A building level (樓層) used to generate one floor-plan sheet per storey.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Storey {
@@ -452,6 +462,35 @@ impl BimDocument {
             self.edited.insert(id);
         }
         elem
+    }
+
+    /// Position, height, rotation and size of a freely placed object (library models and
+    /// furniture), the elements that can be moved and snapped to surfaces in 3D.
+    pub fn placement(&self, id: ElementId) -> Option<ElementPlacement> {
+        if let Some(m) = self.get_model(id) {
+            Some(ElementPlacement { position: m.position, base_z: m.base_z, rotation_deg: m.rotation_deg, size: m.size() })
+        } else {
+            self.get_furniture(id).map(|f| ElementPlacement {
+                position: f.position,
+                base_z: f.base_z,
+                rotation_deg: f.rotation_deg,
+                size: (f.width, f.depth, f.height),
+            })
+        }
+    }
+
+    /// Moves / turns a placed object (see [`Self::placement`]). Returns false for other kinds.
+    pub fn set_placement(&mut self, id: ElementId, position: sketchcad_core::Point2D, base_z: f64, rotation_deg: f64) -> bool {
+        let rotation_deg = rotation_deg.rem_euclid(360.0);
+        if let Some(m) = self.get_model_mut(id) {
+            (m.position, m.base_z, m.rotation_deg) = (position, base_z, rotation_deg);
+        } else if let Some(f) = self.get_furniture_mut(id) {
+            (f.position, f.base_z, f.rotation_deg) = (position, base_z, rotation_deg);
+        } else {
+            return false;
+        }
+        self.touch();
+        true
     }
 
     /// Place a model from the 3D model library (模型百寶箱). Returns `None` for an unknown id.
@@ -1340,6 +1379,23 @@ mod tests {
         assert_eq!(loaded.display_rgba(tree), crate::ModelSpec::find("broadleaf_tree").map(|s| s.body_color));
         assert_eq!(loaded.get_element(tree).unwrap().to_3d_mesh(), doc.get_element(tree).unwrap().to_3d_mesh());
         assert!(doc.to_project().custom_models.is_empty(), "built-in models are not embedded");
+    }
+
+    #[test]
+    fn models_and_furniture_share_a_movable_placement() {
+        let mut doc = BimDocument::new("Placement");
+        let model = doc.insert_model("fridge", Point2D::new(0.0, 0.0), 0.0).unwrap();
+        let sofa = doc.insert_furniture(crate::FurnitureKind::Sofa, Point2D::new(1000.0, 0.0), 0.0, 0.0, Material::fabric());
+        let wall = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(2000.0, 0.0), 200.0, 3000.0, Material::concrete()));
+        assert!(doc.placement(wall).is_none() && !doc.set_placement(wall, Point2D::ZERO, 0.0, 0.0));
+
+        let rev = doc.revision();
+        assert!(doc.set_placement(sofa, Point2D::new(5.0, 6.0), 400.0, -90.0));
+        assert_ne!(doc.revision(), rev, "moving marks the model changed");
+        let p = doc.placement(sofa).unwrap();
+        assert_eq!((p.position, p.base_z, p.rotation_deg, p.size), (Point2D::new(5.0, 6.0), 400.0, 270.0, (2200.0, 900.0, 850.0)));
+        assert!(doc.set_placement(model, Point2D::new(1.0, 2.0), 3.0, 45.0));
+        assert_eq!(doc.get_model(model).unwrap().position, Point2D::new(1.0, 2.0));
     }
 
     #[test]

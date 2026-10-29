@@ -109,6 +109,8 @@ pub enum ModelAction {
     BeginMove(ElementId),
     MoveTo { id: ElementId, position: Point2D, base_z: f64 },
     Rotate(ElementId, f64),
+    /// Snap (吸附) an object flush against a surface; `surface` names it for the status bar
+    Snap { id: ElementId, position: Point2D, base_z: f64, rotation_deg: f64, surface: &'static str },
     Duplicate(ElementId),
     Delete(ElementId),
 }
@@ -124,6 +126,44 @@ struct ModelDrag {
     vertical_px: f32,
 }
 
+/// Surface an object is snapped against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapSurface {
+    Floor,
+    TableTop,
+    Ceiling,
+    Wall,
+}
+
+impl SnapSurface {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Floor => "地板",
+            Self::TableTop => "檯面 / 桌面",
+            Self::Ceiling => "天花板",
+            Self::Wall => "牆面",
+        }
+    }
+}
+
+/// Where an object of `placement` goes when snapped against the surface hit at `p` with
+/// normal `n` (facing the viewer): flush with its bounding box. Against a wall its back
+/// touches the wall and it faces the room, keeping its height unless `centre_on_click`;
+/// under a ceiling its top touches it; on a floor or table top it rests on it.
+pub fn snap_placement(placement: &sketchcad_bim::ElementPlacement, p: Point3D, n: Vector3D, centre_on_click: bool) -> (SnapSurface, Point2D, f64, f64) {
+    let (_, depth, height) = placement.size;
+    if n.z > 0.5 {
+        let surface = if p.z < 200.0 { SnapSurface::Floor } else { SnapSurface::TableTop };
+        return (surface, Point2D::new(p.x, p.y), p.z, placement.rotation_deg);
+    }
+    if n.z < -0.5 {
+        return (SnapSurface::Ceiling, Point2D::new(p.x, p.y), p.z - height, placement.rotation_deg);
+    }
+    let n2 = Vector2D::new(n.x, n.y).normalize_or_zero();
+    let base_z = if centre_on_click { p.z - height * 0.5 } else { placement.base_z };
+    (SnapSurface::Wall, Point2D::new(p.x, p.y) + n2 * (depth * 0.5), base_z, n2.x.atan2(-n2.y).to_degrees())
+}
+
 /// Where a model would be placed under the cursor.
 struct Placement {
     position: Point2D,
@@ -137,6 +177,8 @@ pub struct Viewport3D {
     /// Library model being placed with the Model tool (set by the app every frame)
     pub placing_model: Option<String>,
     pub placing_rotation_deg: f64,
+    /// Object waiting for the user to click the surface it should snap to (吸附)
+    pub snap_element: Option<ElementId>,
     model_actions: Vec<ModelAction>,
     model_drag: Option<ModelDrag>,
     pub push_pull_distance: f64,
@@ -177,6 +219,7 @@ impl Viewport3D {
             scene_bounds: None,
             placing_model: None,
             placing_rotation_deg: 0.0,
+            snap_element: None,
             model_actions: Vec::new(),
             model_drag: None,
         }
@@ -279,15 +322,20 @@ impl Viewport3D {
         }
 
         let clicked_scene = response.clicked() && !mouse_over_cube;
+        // While snapping, a click chooses the target surface instead of the selection
+        let pick_click = clicked_scene && self.snap_element.is_none();
         let total_drawn_polys = if self.gpu.is_some() {
-            self.render_scene_gpu(ui, &painter, rect, doc, selected_id, mouse_pos, clicked_scene)
+            self.render_scene_gpu(ui, &painter, rect, doc, selected_id, mouse_pos, pick_click)
         } else {
-            self.render_scene_software(&painter, rect, doc, selected_id, mouse_pos, clicked_scene)
+            self.render_scene_software(&painter, rect, doc, selected_id, mouse_pos, pick_click)
         };
 
         // 7.5 Model library: placement preview, and the toolbar of a selected model
-        if self.placing_model.is_some() {
-            self.render_model_placement(&painter, rect, mouse_pos.filter(|p| rect.contains(*p) && !mouse_over_cube), clicked_scene);
+        let scene_mouse = mouse_pos.filter(|p| rect.contains(*p) && !mouse_over_cube);
+        if self.snap_element.is_some() {
+            self.render_snap(ui, &painter, rect, doc, scene_mouse, clicked_scene);
+        } else if self.placing_model.is_some() {
+            self.render_model_placement(&painter, rect, scene_mouse, clicked_scene);
         } else if let Some(id) = *selected_id {
             self.render_model_toolbar(ui, rect, doc, id);
         }
@@ -440,7 +488,7 @@ impl Viewport3D {
         }
 
         // A scene click re-picks `selected_id` (None on empty space)
-        if clicked_scene { *selected_id } else { None }
+        if pick_click { *selected_id } else { None }
     }
 
     /// Smoothly turns the camera toward the orientation chosen on the ViewCube.
@@ -665,10 +713,11 @@ impl Viewport3D {
 
     /// Nearest visible surface under a ray: hit point and its normal (facing the camera).
     /// Falls back to the ground plane z = 0 when nothing else is hit.
-    fn surface_hit(&self, eye: Point3D, dir: Vector3D) -> Option<(Point3D, Vector3D, bool)> {
+    fn surface_hit(&self, eye: Point3D, dir: Vector3D, exclude: Option<ElementId>) -> Option<(Point3D, Vector3D, bool)> {
         let mut best: Option<(f64, Vector3D)> = None;
         if let Some(cache) = &self.cache {
-            for tri in &cache.pick_tris {
+            let skip = exclude.and_then(|id| cache.elem_ids.iter().position(|e| *e == id)).map(|i| i as u32);
+            for tri in cache.pick_tris.iter().filter(|t| Some(t.elem) != skip) {
                 if let Some(t) = ray_triangle(eye, dir, &tri.v) {
                     if best.is_none_or(|(bt, _)| t < bt) && !section_removed(&self.settings, eye + dir * t) {
                         let n = (tri.v[1] - tri.v[0]).cross(tri.v[2] - tri.v[0]);
@@ -717,7 +766,7 @@ impl Viewport3D {
         };
         let Some(mouse) = mouse else { return };
         let (eye, dir) = self.screen_ray(rect, mouse);
-        let Some(hit) = self.surface_hit(eye, dir) else { return };
+        let Some(hit) = self.surface_hit(eye, dir, None) else { return };
         let place = self.placement_for(&model, hit);
 
         let mut preview = sketchcad_bim::ModelComponent::new(&model, place.position, place.rotation_deg);
@@ -763,14 +812,81 @@ impl Viewport3D {
         }
     }
 
-    /// Starts, continues and ends a drag-move of the selected library model.
+    /// Click-to-snap (吸附): previews the object flush against the surface under the cursor
+    /// and moves it there on click. Esc cancels.
+    fn render_snap(&mut self, ui: &Ui, painter: &egui::Painter, rect: Rect, doc: &BimDocument, mouse: Option<Pos2>, clicked: bool) {
+        let Some(id) = self.snap_element else { return };
+        let Some(current) = doc.placement(id) else {
+            self.snap_element = None;
+            return;
+        };
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.snap_element = None;
+            return;
+        }
+        let name = doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
+        let banner = format!("🧲 吸附「{name}」：點擊牆面、天花板、地板或桌面 · Shift+點牆 = 以點擊處為中心高度 · Esc 取消");
+        let banner_pos = Pos2::new(rect.center().x, rect.min.y + 58.0);
+        let galley = painter.layout_no_wrap(banner, egui::FontId::proportional(13.0), Color32::WHITE);
+        let bg = Rect::from_center_size(banner_pos, galley.size() + egui::vec2(20.0, 10.0));
+        painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(30, 60, 110, 230));
+        painter.galley(bg.min + egui::vec2(10.0, 5.0), galley, Color32::WHITE);
+
+        let Some(mouse) = mouse else { return };
+        let (eye, dir) = self.screen_ray(rect, mouse);
+        let Some((p, n, _)) = self.surface_hit(eye, dir, Some(id)) else { return };
+        let shift = ui.input(|i| i.modifiers.shift);
+        let (surface, position, base_z, rotation_deg) = snap_placement(&current, p, n, shift);
+
+        // Ghost box of the object at the snapped placement, plus a marker on the surface
+        let (w, d, h) = current.size;
+        let (s, c) = rotation_deg.to_radians().sin_cos();
+        let corners: Vec<Point2D> = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+            .iter()
+            .map(|&(x, y)| {
+                let (lx, ly) = (x * w, y * d);
+                position + Vector2D::new(lx * c - ly * s, lx * s + ly * c)
+            })
+            .collect();
+        let colour = Color32::from_rgb(120, 200, 255);
+        let ring = |z: f64| corners.iter().map(|q| self.project(rect, Point3D::new(q.x, q.y, z))).collect::<Vec<_>>();
+        let (bottom, top) = (ring(base_z), ring(base_z + h));
+        for i in 0..4 {
+            let j = (i + 1) % 4;
+            for (a, b) in [(bottom[i], bottom[j]), (top[i], top[j]), (bottom[i], top[i])] {
+                if let (Some(a), Some(b)) = (a, b) {
+                    painter.line_segment([a, b], Stroke::new(1.8, colour));
+                }
+            }
+        }
+        if let Some(hit_px) = self.project(rect, p) {
+            painter.circle_filled(hit_px, 4.5, colour);
+            if let Some(tip) = self.project(rect, p + n * 300.0) {
+                painter.arrow(hit_px, tip - hit_px, Stroke::new(1.5, colour));
+            }
+        }
+        painter.text(
+            mouse + egui::vec2(0.0, -24.0),
+            egui::Align2::CENTER_CENTER,
+            format!("吸附到{} · 高程 {:.0} mm", surface.label(), base_z),
+            egui::FontId::proportional(12.5),
+            colour,
+        );
+        if clicked {
+            self.model_actions.push(ModelAction::Snap { id, position, base_z: base_z.round(), rotation_deg, surface: surface.label() });
+            self.snap_element = None;
+        }
+    }
+
+    /// Starts, continues and ends a drag-move of the selected object (library model or
+    /// furniture).
     fn handle_model_drag(&mut self, ui: &Ui, response: &egui::Response, rect: Rect, doc: &BimDocument, selected: Option<ElementId>, over_cube: bool) {
-        if response.drag_started_by(egui::PointerButton::Primary) && !over_cube && self.placing_model.is_none() {
+        if response.drag_started_by(egui::PointerButton::Primary) && !over_cube && self.placing_model.is_none() && self.snap_element.is_none() {
             let press = ui.input(|i| i.pointer.press_origin());
             if let (Some(id), Some(press)) = (selected, press) {
-                if let Some(model) = doc.get_model(id) {
+                if let (Some(placement), Some(elem)) = (doc.placement(id), doc.get_element(id)) {
                     let (eye, dir) = self.screen_ray(rect, press);
-                    let mesh = sketchcad_bim::BimElement::to_3d_mesh(model);
+                    let mesh = elem.to_3d_mesh();
                     let hit = (0..mesh.triangle_count())
                         .filter_map(|t| {
                             let v = [0, 1, 2].map(|k| mesh.positions[mesh.indices[t * 3 + k] as usize]);
@@ -782,8 +898,8 @@ impl Viewport3D {
                         self.model_drag = Some(ModelDrag {
                             id,
                             plane_z: grab.z,
-                            offset: model.position - Point2D::new(grab.x, grab.y),
-                            start_base_z: model.base_z,
+                            offset: placement.position - Point2D::new(grab.x, grab.y),
+                            start_base_z: placement.base_z,
                             vertical_px: 0.0,
                         });
                         self.model_actions.push(ModelAction::BeginMove(id));
@@ -796,19 +912,19 @@ impl Viewport3D {
             self.model_drag = None;
             return;
         }
-        let Some(model) = doc.get_model(drag.id) else {
+        let Some(placement) = doc.placement(drag.id) else {
             self.model_drag = None;
             return;
         };
         let (shift, pointer) = ui.input(|i| (i.modifiers.shift, i.pointer.hover_pos()));
         if shift {
-            // Raise / lower: screen pixels to world units at the model's distance
+            // Raise / lower: screen pixels to world units at the object's distance
             drag.vertical_px -= response.drag_delta().y;
             let eye = self.camera.eye_position();
-            let dist = (Point3D::new(model.position.x, model.position.y, model.base_z) - eye).length();
+            let dist = (Point3D::new(placement.position.x, placement.position.y, placement.base_z) - eye).length();
             let world_per_px = 2.0 * dist * (self.camera.fov_y_rad * 0.5).tan() / rect.height().max(1.0) as f64;
             let base_z = (drag.start_base_z + drag.vertical_px as f64 * world_per_px).round();
-            self.model_actions.push(ModelAction::MoveTo { id: drag.id, position: model.position, base_z });
+            self.model_actions.push(ModelAction::MoveTo { id: drag.id, position: placement.position, base_z });
         } else if let Some(pos) = pointer {
             let (plane_z, offset, id) = (drag.plane_z, drag.offset, drag.id);
             let (eye, dir) = self.screen_ray(rect, pos);
@@ -817,7 +933,7 @@ impl Viewport3D {
                 if t > 0.0 {
                     let p = eye + dir * t;
                     let position = (Point2D::new(p.x, p.y) + offset).round();
-                    self.model_actions.push(ModelAction::MoveTo { id, position, base_z: model.base_z });
+                    self.model_actions.push(ModelAction::MoveTo { id, position, base_z: placement.base_z });
                 }
             }
         }
@@ -825,8 +941,8 @@ impl Viewport3D {
 
     /// Floating toolbar above a selected library model: rotate, duplicate, delete.
     fn render_model_toolbar(&mut self, ui: &Ui, rect: Rect, doc: &BimDocument, id: ElementId) {
-        let Some(model) = doc.get_model(id) else { return };
-        let Some(bbox) = sketchcad_bim::BimElement::to_3d_mesh(model).bbox() else { return };
+        let Some(placement) = doc.placement(id) else { return };
+        let Some(bbox) = doc.get_element(id).and_then(|e| e.to_3d_mesh().bbox()) else { return };
         let top = Point3D::new((bbox.min.x + bbox.max.x) * 0.5, (bbox.min.y + bbox.max.y) * 0.5, bbox.max.z);
         let Some(anchor) = self.project(rect, top) else { return };
         if !rect.shrink(20.0).contains(anchor) {
@@ -835,7 +951,7 @@ impl Viewport3D {
         let dragging = self.model_drag.is_some();
         egui::Area::new(egui::Id::new("model_toolbar_3d"))
             .order(egui::Order::Foreground)
-            .fixed_pos(anchor + egui::vec2(-118.0, -64.0))
+            .fixed_pos(anchor + egui::vec2(-150.0, -64.0))
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -845,6 +961,9 @@ impl Viewport3D {
                         if ui.small_button("⟳ 90°").on_hover_text("順時針旋轉 90°").clicked() {
                             self.model_actions.push(ModelAction::Rotate(id, -90.0));
                         }
+                        if ui.small_button("🧲 吸附").on_hover_text("再點擊牆面、天花板、地板或桌面，使其貼緊該表面 [G]").clicked() {
+                            self.snap_element = Some(id);
+                        }
                         if ui.small_button("⧉ 複製").on_hover_text("複製一個並放在旁邊").clicked() {
                             self.model_actions.push(ModelAction::Duplicate(id));
                         }
@@ -852,7 +971,7 @@ impl Viewport3D {
                             self.model_actions.push(ModelAction::Delete(id));
                         }
                     });
-                    let hint = if dragging { format!("高程 {:.0} mm", model.base_z) } else { "拖曳移動 · Shift+拖曳升降".to_string() };
+                    let hint = if dragging { format!("高程 {:.0} mm", placement.base_z) } else { "拖曳移動 · Shift+拖曳升降 · G 吸附".to_string() };
                     ui.label(egui::RichText::new(hint).small().weak());
                 });
             });
@@ -1455,6 +1574,36 @@ mod tests {
             let back = vp.project(rect, eye + dir * 7000.0).unwrap();
             assert!((back - pos).length() < 0.01, "{pos:?} -> {back:?}");
         }
+    }
+
+    #[test]
+    fn snapping_makes_the_bounding_box_touch_the_surface() {
+        let sofa = sketchcad_bim::ElementPlacement {
+            position: Point2D::new(0.0, 0.0),
+            base_z: 0.0,
+            rotation_deg: 30.0,
+            size: (2000.0, 900.0, 800.0),
+        };
+        // Wall face at y = 3000 facing −Y (into the room)
+        let (surface, pos, z, rot) = snap_placement(&sofa, Point3D::new(1500.0, 3000.0, 1300.0), -Vector3D::Y, false);
+        assert_eq!((surface, z), (SnapSurface::Wall, 0.0), "keeps its height on the floor");
+        assert!((pos - Point2D::new(1500.0, 2550.0)).length() < 1e-9, "back flush with the wall: {pos:?}");
+        let (s, c) = rot.to_radians().sin_cos();
+        assert!((Vector2D::new(s, -c) - -Vector2D::Y).length() < 1e-9, "front faces the room");
+        // Its back edge (local +Y at depth / 2) lies exactly on the wall plane
+        let back = pos + Vector2D::new(-s, c) * 450.0;
+        assert!((back.y - 3000.0).abs() < 1e-9);
+
+        let (_, _, z, _) = snap_placement(&sofa, Point3D::new(0.0, 3000.0, 1300.0), -Vector3D::Y, true);
+        assert_eq!(z, 900.0, "Shift centres the object on the click height");
+
+        let (surface, pos, z, rot) = snap_placement(&sofa, Point3D::new(800.0, 900.0, 2700.0), -Vector3D::Z, false);
+        assert_eq!((surface, pos, z, rot), (SnapSurface::Ceiling, Point2D::new(800.0, 900.0), 1900.0, 30.0), "top touches the ceiling");
+
+        let (surface, _, z, _) = snap_placement(&sofa, Point3D::new(0.0, 0.0, 750.0), Vector3D::Z, false);
+        assert_eq!((surface, z), (SnapSurface::TableTop, 750.0));
+        let (surface, _, z, _) = snap_placement(&sofa, Point3D::new(0.0, 0.0, 0.0), Vector3D::Z, false);
+        assert_eq!((surface, z), (SnapSurface::Floor, 0.0));
     }
 
     #[test]

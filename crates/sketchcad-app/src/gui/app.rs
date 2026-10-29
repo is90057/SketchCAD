@@ -70,6 +70,8 @@ pub struct SketchCadApp {
     pub paint_material: Material,
     pub material_library: MaterialLibraryState,
     pub model_browser: ModelBrowserState,
+    /// UI context handed to background jobs so they can wake the UI when done
+    pub model_browser_ctx: Option<egui::Context>,
 }
 
 impl SketchCadApp {
@@ -114,6 +116,7 @@ impl SketchCadApp {
             paint_material: Material::brick(),
             material_library: MaterialLibraryState::load(),
             model_browser: ModelBrowserState::load(),
+            model_browser_ctx: Some(cc.egui_ctx.clone()),
         }
     }
 
@@ -382,15 +385,22 @@ impl SketchCadApp {
             }
             ModelAction::BeginMove(_) => self.save_undo_state(),
             ModelAction::MoveTo { id, position, base_z } => {
-                if let Some(m) = self.doc.get_model_mut(id) {
-                    m.position = position;
-                    m.base_z = base_z;
+                if let Some(p) = self.doc.placement(id) {
+                    self.doc.set_placement(id, position, base_z, p.rotation_deg);
                 }
             }
             ModelAction::Rotate(id, delta) => {
+                if let Some(p) = self.doc.placement(id) {
+                    self.save_undo_state();
+                    self.doc.set_placement(id, p.position, p.base_z, p.rotation_deg + delta);
+                }
+            }
+            ModelAction::Snap { id, position, base_z, rotation_deg, surface } => {
                 self.save_undo_state();
-                if let Some(m) = self.doc.get_model_mut(id) {
-                    m.rotation_deg = (m.rotation_deg + delta).rem_euclid(360.0);
+                if self.doc.set_placement(id, position, base_z, rotation_deg) {
+                    self.selected_id = Some(id);
+                    let name = self.doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
+                    self.show_notify(format!("🧲 已將「{name}」吸附到{surface} (高程 {base_z:.0} mm)"));
                 }
             }
             ModelAction::Duplicate(id) => {
@@ -1079,6 +1089,7 @@ impl eframe::App for SketchCadApp {
                     }
                 } else if i.key_pressed(egui::Key::Escape) || (!i.modifiers.command && !i.modifiers.ctrl && i.key_pressed(egui::Key::S)) {
                     self.tool_mode = ToolMode::Select;
+                    self.viewport_3d.snap_element = None;
                     self.viewport_2d.wall_start_pt = None;
                     self.viewport_2d.slab_start_pt = None;
                     self.viewport_2d.ceiling_start_pt = None;
@@ -1128,6 +1139,17 @@ impl eframe::App for SketchCadApp {
                     self.tool_mode = ToolMode::Paint;
                 } else if i.key_pressed(egui::Key::B) {
                     self.tool_mode = ToolMode::Model;
+                } else if i.key_pressed(egui::Key::G) {
+                    // 吸附: the next click on a surface in the 3D view snaps the selection to it
+                    match self.selected_id.filter(|id| self.doc.placement(*id).is_some()) {
+                        Some(id) => {
+                            self.viewport_3d.snap_element = Some(id);
+                            if self.layout == ViewLayout::Drafting2DOnly {
+                                self.layout = ViewLayout::Split2D3D;
+                            }
+                        }
+                        None => self.show_notify("吸附 [G]：請先選取一個百寶箱模型或家具"),
+                    }
                 }
             });
         }

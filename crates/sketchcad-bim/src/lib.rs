@@ -26,7 +26,7 @@ pub mod model_library;
 pub mod project;
 
 pub use cost::{CostLineItem, QuantityTakeoff};
-pub use document::{BimDocument, Storey};
+pub use document::{BimDocument, ElementPlacement, Storey};
 pub use element::{BimElement, ElementKind};
 pub use project::{element_to_serializable, PaintedElement, SerializableElement, SketchCadProject};
 pub use elements::beam::Beam;
