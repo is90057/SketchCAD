@@ -27,6 +27,7 @@ pub enum ModelCategory {
     Architecture,
     Furniture,
     Appliance,
+    Kitchen,
     PottedPlant,
     Landscape,
     Vehicle,
@@ -35,10 +36,11 @@ pub enum ModelCategory {
 }
 
 impl ModelCategory {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Architecture,
         Self::Furniture,
         Self::Appliance,
+        Self::Kitchen,
         Self::PottedPlant,
         Self::Landscape,
         Self::Vehicle,
@@ -48,14 +50,15 @@ impl ModelCategory {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Architecture => "🏛 建築構件",
-            Self::Furniture => "🛋 家具",
+            Self::Architecture => "🏢 建築構件",
+            Self::Furniture => "🗄 家具",
             Self::Appliance => "🔌 電器用品",
-            Self::PottedPlant => "🪴 盆栽",
+            Self::Kitchen => "🍽 廚房用品",
+            Self::PottedPlant => "🌱 盆栽",
             Self::Landscape => "🌳 植物景觀",
             Self::Vehicle => "🚗 車輛",
-            Self::Outdoor => "🏞 戶外設施",
-            Self::People => "🧍 人物配景",
+            Self::Outdoor => "🌄 戶外設施",
+            Self::People => "🚶 人物配景",
         }
     }
 
@@ -65,6 +68,7 @@ impl ModelCategory {
             Self::Architecture => "Model 建築構件 (模型庫)",
             Self::Furniture => "FF&E 家具與軟裝設備工程",
             Self::Appliance => "Appliance 家電設備",
+            Self::Kitchen => "Kitchen 廚具與廚房用品",
             Self::PottedPlant | Self::Landscape => "Landscape 植栽景觀工程",
             Self::Vehicle | Self::Outdoor | Self::People => "Entourage 配景與戶外設施",
         }

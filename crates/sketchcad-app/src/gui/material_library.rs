@@ -185,7 +185,7 @@ impl SketchCadApp {
                 });
                 ui.horizontal(|ui| {
                     if ui
-                        .selectable_label(self.tool_mode == ToolMode::Paint, "🪣 油漆桶 [K]")
+                        .selectable_label(self.tool_mode == ToolMode::Paint, "💧 油漆桶 [K]")
                         .on_hover_text("點擊 2D / 3D 視口中的構件貼附目前材質；Alt + 點擊吸取材質")
                         .clicked()
                     {
@@ -233,7 +233,7 @@ impl SketchCadApp {
                                     actions.push(LibraryAction::Edit(material.clone(), true));
                                     ui.close_menu();
                                 }
-                                if ui.button("⧉ 複製為新材質").clicked() {
+                                if ui.button("🗐 複製為新材質").clicked() {
                                     actions.push(LibraryAction::Duplicate(material.clone()));
                                     ui.close_menu();
                                 }
@@ -289,7 +289,7 @@ impl SketchCadApp {
                                     actions.push(LibraryAction::Choose(material.clone()));
                                 }
                                 response.context_menu(|ui| {
-                                    if ui.button("⧉ 以此為範本新增材質").clicked() {
+                                    if ui.button("🗐 以此為範本新增材質").clicked() {
                                         actions.push(LibraryAction::Duplicate(material.clone()));
                                         ui.close_menu();
                                     }

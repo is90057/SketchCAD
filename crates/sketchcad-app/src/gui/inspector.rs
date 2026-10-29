@@ -176,7 +176,7 @@ fn render_hierarchy_tree(
 
         ui.add_space(4.0);
 
-        // Group 1: 🏗️ 結構與屋頂工程 (Structural Framework & Roof)
+        // Group 1: 🏗 結構與屋頂工程 (Structural Framework & Roof)
         render_category_group(
             ui,
             doc,
@@ -185,7 +185,7 @@ fn render_hierarchy_tree(
             selected_id,
             state,
             "structure",
-            "🏗️ 結構與屋頂工程 (Structure & Roof)",
+            "🏢 結構與屋頂工程 (Structure & Roof)",
             &[ElementKind::Wall, ElementKind::Column, ElementKind::Beam, ElementKind::Slab, ElementKind::Roof],
         );
 
@@ -215,7 +215,7 @@ fn render_hierarchy_tree(
             &[ElementKind::Ceiling, ElementKind::Stairs, ElementKind::Railing, ElementKind::Ramp],
         );
 
-        // Group 4: 🛋️ 室內空間與軟裝照明規劃 (Interior Space, Furniture & Lighting)
+        // Group 4: 🛋 室內空間與軟裝照明規劃 (Interior Space, Furniture & Lighting)
         render_category_group(
             ui,
             doc,
@@ -224,7 +224,7 @@ fn render_hierarchy_tree(
             selected_id,
             state,
             "furnishing",
-            "🛋️ 室內空間與軟裝照明 (Space, FF&E & Lighting)",
+            "🖼 室內空間與軟裝照明 (Space, FF&E & Lighting)",
             &[ElementKind::Space, ElementKind::Furniture, ElementKind::LightFixture, ElementKind::Outlet],
         );
 
@@ -667,7 +667,7 @@ fn render_vs_property_grid(
             ui.group(|ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("構件操作:").strong().color(egui::Color32::from_rgb(255, 215, 0)));
-                    if ui.button(egui::RichText::new("✂️ 剪下").color(egui::Color32::from_rgb(255, 180, 100)))
+                    if ui.button(egui::RichText::new("✂ 剪下").color(egui::Color32::from_rgb(255, 180, 100)))
                         .on_hover_text("剪下目前構件至剪貼簿 [Ctrl+X]")
                         .clicked()
                     {
@@ -698,7 +698,7 @@ fn render_vs_property_grid(
                             *selected_id = Some(new_id);
                         }
                     }
-                    if ui.button(egui::RichText::new("🗑️ 刪除此構件 (Delete)").color(egui::Color32::from_rgb(255, 110, 110)))
+                    if ui.button(egui::RichText::new("🗑 刪除此構件 (Delete)").color(egui::Color32::from_rgb(255, 110, 110)))
                         .on_hover_text("刪除目前選定的構件 [Delete / Backspace]")
                         .clicked()
                     {

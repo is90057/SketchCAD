@@ -407,7 +407,7 @@ impl Viewport3D {
                         ui.label(egui::RichText::new("2. 空間著色風格 (Shading Mode):").small().strong().color(Color32::from_rgb(255, 215, 0)));
                         ui.radio_value(&mut self.settings.shading_mode, ShadingMode::Realistic, "🎨 擬真實體材質著色 (Material)");
                         ui.radio_value(&mut self.settings.shading_mode, ShadingMode::HiddenLine, "📐 建築消隱線框 (Technical)");
-                        ui.radio_value(&mut self.settings.shading_mode, ShadingMode::XRay, "🩻 X-Ray 空間透視 (X-Ray)");
+                        ui.radio_value(&mut self.settings.shading_mode, ShadingMode::XRay, "👓 X-Ray 空間透視 (X-Ray)");
 
                         ui.add_space(4.0);
                         ui.label(egui::RichText::new("3. 透視保護與工程邊線:").small().strong().color(Color32::from_rgb(255, 215, 0)));
@@ -825,7 +825,7 @@ impl Viewport3D {
             return;
         }
         let name = doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
-        let banner = format!("🧲 吸附「{name}」：點擊牆面、天花板、地板或桌面 · Shift+點牆 = 以點擊處為中心高度 · Esc 取消");
+        let banner = format!("📌 吸附「{name}」：點擊牆面、天花板、地板或桌面 · Shift+點牆 = 以點擊處為中心高度 · Esc 取消");
         let banner_pos = Pos2::new(rect.center().x, rect.min.y + 58.0);
         let galley = painter.layout_no_wrap(banner, egui::FontId::proportional(13.0), Color32::WHITE);
         let bg = Rect::from_center_size(banner_pos, galley.size() + egui::vec2(20.0, 10.0));
@@ -961,10 +961,10 @@ impl Viewport3D {
                         if ui.small_button("⟳ 90°").on_hover_text("順時針旋轉 90°").clicked() {
                             self.model_actions.push(ModelAction::Rotate(id, -90.0));
                         }
-                        if ui.small_button("🧲 吸附").on_hover_text("再點擊牆面、天花板、地板或桌面，使其貼緊該表面 [G]").clicked() {
+                        if ui.small_button("📌 吸附").on_hover_text("再點擊牆面、天花板、地板或桌面，使其貼緊該表面 [G]").clicked() {
                             self.snap_element = Some(id);
                         }
-                        if ui.small_button("⧉ 複製").on_hover_text("複製一個並放在旁邊").clicked() {
+                        if ui.small_button("🗐 複製").on_hover_text("複製一個並放在旁邊").clicked() {
                             self.model_actions.push(ModelAction::Duplicate(id));
                         }
                         if ui.small_button("🗑 刪除").on_hover_text("刪除此模型 [Del]").clicked() {

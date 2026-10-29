@@ -30,6 +30,53 @@ pub enum ViewLayout {
     Orbit3DOnly,
 }
 
+/// Tabs of the ribbon toolbar (工具列分頁).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RibbonTab {
+    Home,
+    Build,
+    Interior,
+    Materials,
+    View,
+}
+
+impl RibbonTab {
+    const ALL: [Self; 5] = [Self::Home, Self::Build, Self::Interior, Self::Materials, Self::View];
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Home => "🏠 常用",
+            Self::Build => "🏢 建築",
+            Self::Interior => "🖼 室內",
+            Self::Materials => "🎨 材質與模型",
+            Self::View => "👁 檢視",
+        }
+    }
+
+    /// Tab holding a drawing tool, so a keyboard shortcut brings its options into view.
+    fn of_tool(mode: ToolMode) -> Self {
+        match mode {
+            ToolMode::Select | ToolMode::Move | ToolMode::PushPull => Self::Home,
+            ToolMode::Wall
+            | ToolMode::Column
+            | ToolMode::Slab
+            | ToolMode::Door
+            | ToolMode::Window
+            | ToolMode::Stairs
+            | ToolMode::Railing
+            | ToolMode::Ramp
+            | ToolMode::CurtainWall
+            | ToolMode::Roof
+            | ToolMode::Ceiling => Self::Build,
+            ToolMode::Space | ToolMode::Furniture | ToolMode::LightFixture | ToolMode::Outlet => Self::Interior,
+            ToolMode::Paint | ToolMode::Model => Self::Materials,
+        }
+    }
+}
+
+/// Toolbar entry: tool, title (with shortcut) and tooltip description.
+type ToolEntry = (ToolMode, &'static str, &'static str);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     Ifc,
@@ -45,6 +92,9 @@ pub struct SketchCadApp {
     pub viewport_3d: Viewport3D,
     pub layout: ViewLayout,
     pub tool_mode: ToolMode,
+    pub ribbon_tab: RibbonTab,
+    /// Tool of the previous frame, to follow tool changes with the ribbon tab
+    ribbon_last_tool: ToolMode,
     pub selected_id: Option<ElementId>,
     pub status_text: String,
     pub notification: Option<(String, std::time::Instant)>,
@@ -95,6 +145,8 @@ impl SketchCadApp {
             viewport_3d,
             layout: ViewLayout::Split2D3D,
             tool_mode: ToolMode::Select,
+            ribbon_tab: RibbonTab::Home,
+            ribbon_last_tool: ToolMode::Select,
             selected_id: None,
             status_text: "就緒 (Ready) | BIM 參數化核心已連動".to_string(),
             notification: Some(("歡迎使用 SketchCAD 次世代建築資訊模型系統！".to_string(), std::time::Instant::now())),
@@ -369,6 +421,264 @@ impl SketchCadApp {
         self.show_notify(format!("🎨 已將「{}」貼附至 {}", self.paint_material.name, elem_name));
     }
 
+    /// Ribbon toolbar (工具列分頁): undo / redo and the tab strip on the first row, the
+    /// active tab's tool groups on the second. Switching tools by shortcut follows the tab.
+    fn render_ribbon(&mut self, ui: &mut egui::Ui) {
+        if self.tool_mode != self.ribbon_last_tool {
+            self.ribbon_tab = RibbonTab::of_tool(self.tool_mode);
+            self.ribbon_last_tool = self.tool_mode;
+        }
+
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!self.undo_stack.is_empty(), egui::Button::new("↶")).on_hover_text("復原上一步操作 [Ctrl+Z]").clicked() {
+                self.undo();
+            }
+            if ui.add_enabled(!self.redo_stack.is_empty(), egui::Button::new("↷")).on_hover_text("取消復原 / 重做 [Ctrl+Y / Ctrl+Shift+Z]").clicked() {
+                self.redo();
+            }
+            ui.separator();
+            for tab in RibbonTab::ALL {
+                let selected = self.ribbon_tab == tab;
+                let text = egui::RichText::new(tab.label()).size(13.5);
+                let text = if selected { text.strong().color(egui::Color32::from_rgb(140, 200, 255)) } else { text };
+                if ui.selectable_label(selected, text).clicked() {
+                    self.ribbon_tab = tab;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let toggle_label = if self.show_inspector { "收合數據面板 ⏵" } else { "展開數據面板 ◧" };
+                if ui.small_button(toggle_label).on_hover_text("收合或展開右側「即時數量與成本明細表」與「構件參數檢查器」面板").clicked() {
+                    self.show_inspector = !self.show_inspector;
+                }
+                if let Some((msg, time)) = &self.notification {
+                    if time.elapsed().as_secs() < 5 {
+                        ui.add(egui::Label::new(egui::RichText::new(msg).color(egui::Color32::from_rgb(80, 200, 120))).truncate());
+                    }
+                }
+            });
+        });
+
+        egui::ScrollArea::horizontal().id_salt("ribbon_scroll").auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.set_min_height(56.0);
+                match self.ribbon_tab {
+                    RibbonTab::Home => self.ribbon_home(ui),
+                    RibbonTab::Build => self.ribbon_build(ui),
+                    RibbonTab::Interior => self.ribbon_interior(ui),
+                    RibbonTab::Materials => self.ribbon_materials(ui),
+                    RibbonTab::View => self.ribbon_view(ui),
+                }
+            });
+        });
+    }
+
+    /// Icon buttons for drawing tools; picking one resets any half-drawn input.
+    fn tool_buttons(&mut self, ui: &mut egui::Ui, tools: &[ToolEntry]) {
+        for &(mode, title, desc) in tools {
+            if tool_icon_button(ui, mode, self.tool_mode, title, desc) {
+                self.tool_mode = mode;
+                self.viewport_2d.wall_start_pt = None;
+                self.viewport_2d.slab_start_pt = None;
+                self.viewport_2d.ceiling_start_pt = None;
+                self.viewport_2d.stair_start_pt = None;
+                self.viewport_2d.railing_start_pt = None;
+                self.viewport_2d.roof_start_pt = None;
+                self.viewport_2d.ramp_start_pt = None;
+                self.viewport_2d.curtain_wall_start_pt = None;
+                self.viewport_2d.space_start_pt = None;
+                self.viewport_2d.move_base_pt = None;
+            }
+        }
+    }
+
+    fn ribbon_home(&mut self, ui: &mut egui::Ui) {
+        ribbon_group(ui, "選取與編輯", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::Select, "選取工具 (Select) [S / Esc]", "點選 2D 或 3D 視口中的建築構件查看屬性與連動算量"),
+                (ToolMode::Move, "構件移動 (Move) [M]", "選定構件後，在視口中點選基準點與目標位置進行互動平移"),
+                (ToolMode::PushPull, "幾何推拉 (Push-Pull) [P]", "選擇任意 3D 封閉平面，沿其法向量方向進行互動拉伸建模"),
+            ]);
+        });
+        ribbon_group(ui, "剪貼簿", |ui| {
+            let has_sel = self.selected_id.is_some();
+            if ui.add_enabled(has_sel, egui::Button::new("✂ 剪下")).on_hover_text("剪下選定構件 [Ctrl+X]").clicked() {
+                self.cut();
+            }
+            if ui.add_enabled(has_sel, egui::Button::new("📋 複製")).on_hover_text("複製選定構件 [Ctrl+C]").clicked() {
+                self.copy();
+            }
+            if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("📄 貼上")).on_hover_text("貼上剪貼簿中的構件 [Ctrl+V]").clicked() {
+                self.paste();
+            }
+            let delete = egui::Button::new(egui::RichText::new("🗑 刪除").color(egui::Color32::from_rgb(255, 120, 120)));
+            if ui.add_enabled(has_sel, delete).on_hover_text("刪除目前選定的構件 [Delete / Backspace]").clicked() {
+                if let Some(id) = self.selected_id.take() {
+                    self.save_undo_state();
+                    self.doc.remove_element(id);
+                    self.show_notify("已刪除選定構件");
+                }
+            }
+        });
+    }
+
+    fn ribbon_build(&mut self, ui: &mut egui::Ui) {
+        ribbon_group(ui, "結構", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::Wall, "牆體繪製 (Wall) [W]", "在 2D 平面圖中依序點擊起點與終點，即時生成帶厚度、高度與成本的 BIM 實體牆"),
+                (ToolMode::Column, "結構柱 (Column) [C]", "放置標準混凝土/鋼構矩形柱與結構樑，自帶標準工程剖面符號"),
+                (ToolMode::Slab, "結構樓板 (Slab) [F]", "在 2D 平面依序點擊對角兩點建立結構樓板與筏基實體"),
+            ]);
+        });
+        ribbon_group(ui, "門窗開口", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::Door, "門扇放置 (Door) [D]", "於已選定之牆體上插入門扇，自動執行布林開洞與立面門片生成"),
+                (ToolMode::Window, "窗戶放置 (Window) [Shift+W]", "於已選定之牆體上插入窗戶，自動進行實體鏤空並配置玻璃材質"),
+            ]);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("窗型").small().weak());
+                egui::ComboBox::from_id_salt("place_window_type")
+                    .width(110.0)
+                    .selected_text(self.viewport_2d.window_type.label())
+                    .show_ui(ui, |ui| {
+                        for t in sketchcad_bim::WindowType::ALL {
+                            ui.selectable_value(&mut self.viewport_2d.window_type, t, t.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("新放置窗戶的開窗型式；已放置的窗戶可於右側屬性面板變更窗型、窗框與玻璃");
+            });
+        });
+        ribbon_group(ui, "垂直動線", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::Stairs, "直通樓梯 (Stairs) [R]", "在 2D 平面點選起步點與終點建立標準建築直通樓梯與級高踏步"),
+                (ToolMode::Railing, "欄杆扶手 (Railing)", "在 2D 平面點選起點與終點，建立沿階梯爬升或陽台邊緣的安全防護欄杆與玻璃隔板"),
+                (ToolMode::Ramp, "無障礙坡道 (Ramp)", "在 2D 平面點選起步點與到達點，建立 1:12 法定無障礙防滑坡道與爬升箭頭"),
+            ]);
+        });
+        ribbon_group(ui, "外殼與天花", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::CurtainWall, "幕牆系統 (Curtain Wall)", "在 2D 平面依序點選起點與終點，建立帶鋁合金豎梃、橫樑與雙層玻璃的單元式幕牆系統"),
+                (ToolMode::Roof, "屋頂系統 (Roof)", "在 2D 平面點選對角兩點建立帶坡度、出挑挑簷與屋脊線的雙坡屋頂系統"),
+                (ToolMode::Ceiling, "天花板 (Ceiling) [T]", "在 2D 平面依序點擊對角兩點建立輕鋼架天花板 (淨高 2800mm)"),
+            ]);
+        });
+    }
+
+    fn ribbon_interior(&mut self, ui: &mut egui::Ui) {
+        ribbon_group(ui, "空間", |ui| {
+            self.tool_buttons(ui, &[(
+                ToolMode::Space,
+                "空間區域 (Space) [房間與坪數]",
+                "在 2D 平面點選對角劃定空間區域 (客廳/臥室/廚房/衛浴等)，自動計算地坪面積與台灣坪數",
+            )]);
+        });
+        ribbon_group(ui, "家具", |ui| {
+            self.tool_buttons(ui, &[(
+                ToolMode::Furniture,
+                "室內家具 (Furniture) [軟裝設備]",
+                "放置床組、沙發、餐桌椅、廚具水槽、衛浴馬桶、衣櫃、書桌，以及電視、音響組與落地喇叭 (於右側選擇品項，按 R 鍵旋轉)",
+            )]);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("品項").small().weak());
+                egui::ComboBox::from_id_salt("place_furniture_kind")
+                    .width(170.0)
+                    .selected_text(self.viewport_2d.furniture_cycle_kind.display_name())
+                    .show_ui(ui, |ui| {
+                        for k in sketchcad_bim::FurnitureKind::ALL {
+                            ui.selectable_value(&mut self.viewport_2d.furniture_cycle_kind, k, k.display_name());
+                        }
+                    })
+                    .response
+                    .on_hover_text("選擇要放置的家具或影音設備");
+            });
+        });
+        ribbon_group(ui, "電氣與照明", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::Outlet, "電源插座 (Outlet) [美規/歐規 · 110V/220V]", "移動至牆體旁點擊即安裝於該側牆面 (離地 300mm)；於右側選擇美規 / 歐規、110V / 220V 與單插 / 雙插"),
+                (ToolMode::LightFixture, "照明燈具 (Lighting) [天花燈具]", "在天花板安裝嵌燈、客廳吊燈、軌道投射燈、吸頂燈或燈帶，設定流明與色溫"),
+            ]);
+            ui.vertical(|ui| {
+                let vp = &mut self.viewport_2d;
+                ui.horizontal(|ui| {
+                    for standard in sketchcad_bim::PlugStandard::ALL {
+                        ui.selectable_value(&mut vp.outlet_standard, standard, standard.label());
+                    }
+                    ui.separator();
+                    for voltage in sketchcad_bim::OutletVoltage::ALL {
+                        ui.selectable_value(&mut vp.outlet_voltage, voltage, voltage.label());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("插座規格").small().weak());
+                    ui.selectable_value(&mut vp.outlet_gangs, 1, "單插");
+                    ui.selectable_value(&mut vp.outlet_gangs, 2, "雙插");
+                });
+            });
+        });
+    }
+
+    fn ribbon_materials(&mut self, ui: &mut egui::Ui) {
+        ribbon_group(ui, "材質", |ui| {
+            self.tool_buttons(ui, &[(
+                ToolMode::Paint,
+                "油漆桶上色 (Paint Bucket) [K]",
+                "從材質庫選定或新增材質，點擊 2D / 3D 視口中的構件即可直接貼附上色；按住 Alt 點擊可吸取構件材質",
+            )]);
+            let open = self.material_library.open || self.tool_mode == ToolMode::Paint;
+            if ui.selectable_label(open, "🎨 材質庫").on_hover_text("瀏覽內建材質、新增與管理自訂材質 (自訂材質會保存並用於所有專案)").clicked() {
+                self.material_library.open = !open;
+                if open && self.tool_mode == ToolMode::Paint {
+                    self.tool_mode = ToolMode::Select;
+                }
+            }
+        });
+        ribbon_group(ui, "3D 模型", |ui| {
+            self.tool_buttons(ui, &[(
+                ToolMode::Model,
+                "3D 模型百寶箱 (Model Library) [B]",
+                "開啟模型百寶箱，從建築構件、家具、電器、盆栽、植物景觀、車輛、戶外設施與人物配景中挑選預建 3D 模型，在 2D 平面或 3D 視圖點擊放置 (按 R 旋轉)",
+            )]);
+            let has_placeable = self.selected_id.is_some_and(|id| self.doc.placement(id).is_some());
+            if ui
+                .add_enabled(has_placeable, egui::Button::new("📌 吸附 [G]"))
+                .on_hover_text("選取百寶箱模型或家具後，點擊 3D 視圖中的牆面、天花板、地板或桌面使其貼緊")
+                .on_disabled_hover_text("請先選取一個百寶箱模型或家具")
+                .clicked()
+            {
+                self.viewport_3d.snap_element = self.selected_id;
+                if self.layout == ViewLayout::Drafting2DOnly {
+                    self.layout = ViewLayout::Split2D3D;
+                }
+            }
+        });
+    }
+
+    fn ribbon_view(&mut self, ui: &mut egui::Ui) {
+        ribbon_group(ui, "視窗配置", |ui| {
+            ui.selectable_value(&mut self.layout, ViewLayout::Split2D3D, "◫ 2D + 3D");
+            ui.selectable_value(&mut self.layout, ViewLayout::Drafting2DOnly, "▭ 僅 2D");
+            ui.selectable_value(&mut self.layout, ViewLayout::Orbit3DOnly, "▣ 僅 3D");
+        });
+        ribbon_group(ui, "2D 製圖輔助", |ui| {
+            ui.checkbox(&mut self.viewport_2d.snap_enabled, "端點吸附 (Snap)").on_hover_text("開啟/關閉 2D 畫布的幾何端點吸附功能");
+            ui.checkbox(&mut self.viewport_2d.show_dimensions, "📐 尺寸標註").on_hover_text("顯示或隱藏 2D 平面工程圖上的建築尺寸標註線與延伸界限輔助線");
+        });
+        ribbon_group(ui, "3D 檢視", |ui| {
+            let settings = &mut self.viewport_3d.settings;
+            if ui.selectable_label(settings.enable_section_cut, "🔪 3D 剖切盒").on_hover_text("開啟/關閉即時 3D 剖面切割 (透視室內裝修與家具格局)").clicked() {
+                settings.enable_section_cut = !settings.enable_section_cut;
+            }
+            ui.checkbox(&mut settings.show_silhouette_edges, "邊線");
+            ui.checkbox(&mut settings.show_ground_grid, "地面網格");
+            if ui.button("⚙ 渲染設定").on_hover_text("3D 渲染品質、解析度與剖切設定").clicked() {
+                settings.show_settings_panel = true;
+            }
+        });
+        ribbon_group(ui, "面板", |ui| {
+            ui.checkbox(&mut self.show_inspector, "數據面板 (明細表 / 檢查器)");
+        });
+    }
+
     /// Applies a model-library edit made in the 3D view.
     fn apply_model_action(&mut self, action: ModelAction) {
         match action {
@@ -400,7 +710,7 @@ impl SketchCadApp {
                 if self.doc.set_placement(id, position, base_z, rotation_deg) {
                     self.selected_id = Some(id);
                     let name = self.doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
-                    self.show_notify(format!("🧲 已將「{name}」吸附到{surface} (高程 {base_z:.0} mm)"));
+                    self.show_notify(format!("📌 已將「{name}」吸附到{surface} (高程 {base_z:.0} mm)"));
                 }
             }
             ModelAction::Duplicate(id) => {
@@ -459,7 +769,7 @@ impl SketchCadApp {
                 self.clipboard = Some(boxed);
                 self.doc.remove_element(id);
                 self.selected_id = None;
-                self.show_notify(format!("✂️ 已剪下構件: {}", name));
+                self.show_notify(format!("✂ 已剪下構件: {}", name));
             }
         }
     }
@@ -962,7 +1272,7 @@ impl SketchCadApp {
                     // Format Radio Selection
                     ui.group(|ui| {
                         let prev_format = self.export_format;
-                        ui.radio_value(&mut self.export_format, ExportFormat::Ifc, "🏛️ OpenBIM IFC4 建築資訊模型 (*.ifc)");
+                        ui.radio_value(&mut self.export_format, ExportFormat::Ifc, "🌐 OpenBIM IFC4 建築資訊模型 (*.ifc)");
                         ui.label(egui::RichText::new("    符合 buildingSMART 標準，保留全部牆/板/柱/樑/門窗實體及 3D 幾何語義").small().color(egui::Color32::from_rgb(160, 175, 195)));
                         ui.add_space(4.0);
 
@@ -978,7 +1288,7 @@ impl SketchCadApp {
                         ui.label(egui::RichText::new("    完整保存所有參數化構件、材質紋理、圖層可見度與工程量估驗清單").small().color(egui::Color32::from_rgb(160, 175, 195)));
                         ui.add_space(4.0);
 
-                        ui.radio_value(&mut self.export_format, ExportFormat::Skp, "🧊 SketchUp 3D 模型 (*.skp)");
+                        ui.radio_value(&mut self.export_format, ExportFormat::Skp, "🔳 SketchUp 3D 模型 (*.skp)");
                         ui.label(egui::RichText::new("    每個構件匯出為群組並依類別分標籤 (Tag)，共平面三角形合併為完整面；可由 SketchUp 2013 以上開啟").small().color(egui::Color32::from_rgb(160, 175, 195)));
 
                         if prev_format != self.export_format {
@@ -1187,7 +1497,7 @@ impl eframe::App for SketchCadApp {
                     }
                     ui.separator();
                     ui.menu_button("📂 載入範例 (Samples) ▶", |ui| {
-                        if ui.button("🏛️ 現代度假別墅 IFC4 模型 (sample_villa.ifc)").clicked() {
+                        if ui.button("🏢 現代度假別墅 IFC4 模型 (sample_villa.ifc)").clicked() {
                             self.load_sample_villa_ifc();
                             ui.close_menu();
                         }
@@ -1203,7 +1513,7 @@ impl eframe::App for SketchCadApp {
                             self.load_sample_bcf();
                             ui.close_menu();
                         }
-                        if ui.button("🛋️ 完整軟裝與帷幕別墅 (Villa with Furniture & Facade)").clicked() {
+                        if ui.button("🖼 完整軟裝與帷幕別墅 (Villa with Furniture & Facade)").clicked() {
                             self.load_sample_full();
                             ui.close_menu();
                         }
@@ -1230,7 +1540,7 @@ impl eframe::App for SketchCadApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.add_enabled(has_sel, egui::Button::new("✂️ 剪下 (Cut) [Ctrl+X]")).clicked() {
+                    if ui.add_enabled(has_sel, egui::Button::new("✂ 剪下 (Cut) [Ctrl+X]")).clicked() {
                         self.cut();
                         ui.close_menu();
                     }
@@ -1243,7 +1553,7 @@ impl eframe::App for SketchCadApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.add_enabled(has_sel, egui::Button::new("🗑️ 刪除選取構件 [Del / Backspace]")).clicked() {
+                    if ui.add_enabled(has_sel, egui::Button::new("🗑 刪除選取構件 [Del / Backspace]")).clicked() {
                         if let Some(id) = self.selected_id {
                             self.save_undo_state();
                             self.doc.remove_element(id);
@@ -1311,265 +1621,9 @@ impl eframe::App for SketchCadApp {
                 });
             });
 
-            // 2. Toolbar Ribbon with Vector Icons & Tooltips
+            // 2. Ribbon toolbar: tab strip + grouped tools of the active tab
             ui.separator();
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!self.undo_stack.is_empty(), egui::Button::new("↶ 復原"))
-                    .on_hover_text("復原上一步操作 [Ctrl+Z]")
-                    .clicked()
-                {
-                    self.undo();
-                }
-                if ui.add_enabled(!self.redo_stack.is_empty(), egui::Button::new("↷ 重做"))
-                    .on_hover_text("取消復原 / 重做 [Ctrl+Y / Ctrl+Shift+Z]")
-                    .clicked()
-                {
-                    self.redo();
-                }
-                ui.separator();
-                ui.label(egui::RichText::new("工具箱:").strong());
-
-                let tools = [
-                    (
-                        ToolMode::Select,
-                        "選取工具 (Select) [S / Esc]",
-                        "點選 2D 或 3D 視口中的建築構件查看屬性與連動算量",
-                    ),
-                    (
-                        ToolMode::Move,
-                        "構件移動 (Move) [M]",
-                        "選定構件後，在視口中點選基準點與目標位置進行互動平移",
-                    ),
-                    (
-                        ToolMode::Wall,
-                        "牆體繪製 (Wall) [W]",
-                        "在 2D 平面圖中依序點擊起點與終點，即時生成帶厚度、高度與成本的 BIM 實體牆",
-                    ),
-                    (
-                        ToolMode::Column,
-                        "結構柱 (Column) [C]",
-                        "放置標準混凝土/鋼構矩形柱與結構樑，自帶標準工程剖面符號",
-                    ),
-                    (
-                        ToolMode::Door,
-                        "門扇放置 (Door) [D]",
-                        "於已選定之牆體上插入門扇，自動執行布林開洞與立面門片生成",
-                    ),
-                    (
-                        ToolMode::Window,
-                        "窗戶放置 (Window) [Shift+W]",
-                        "於已選定之牆體上插入窗戶，自動進行實體鏤空並配置玻璃材質",
-                    ),
-                    (
-                        ToolMode::Slab,
-                        "結構樓板 (Slab) [F]",
-                        "在 2D 平面依序點擊對角兩點建立結構樓板與筏基實體",
-                    ),
-                    (
-                        ToolMode::Ceiling,
-                        "天花板 (Ceiling) [T]",
-                        "在 2D 平面依序點擊對角兩點建立輕鋼架天花板 (淨高 2800mm)",
-                    ),
-                    (
-                        ToolMode::Stairs,
-                        "直通樓梯 (Stairs) [R]",
-                        "在 2D 平面點選起步點與終點建立標準建築直通樓梯與級高踏步",
-                    ),
-                    (
-                        ToolMode::Railing,
-                        "欄杆扶手 (Railing) [B]",
-                        "在 2D 平面點選起點與終點，建立沿階梯爬升或陽台邊緣的安全防護欄杆與玻璃隔板",
-                    ),
-                    (
-                        ToolMode::CurtainWall,
-                        "幕牆系統 (Curtain Wall)",
-                        "在 2D 平面依序點選起點與終點，建立帶鋁合金豎梃、橫樑與雙層玻璃的單元式幕牆系統",
-                    ),
-                    (
-                        ToolMode::Roof,
-                        "屋頂系統 (Roof)",
-                        "在 2D 平面點選對角兩點建立帶坡度、出挑挑簷與屋脊線的雙坡屋頂系統",
-                    ),
-                    (
-                        ToolMode::Ramp,
-                        "無障礙坡道 (Ramp)",
-                        "在 2D 平面點選起步點與到達點，建立 1:12 法定無障礙防滑坡道與爬升箭頭",
-                    ),
-                    (
-                        ToolMode::Paint,
-                        "油漆桶上色 (Paint Bucket) [K]",
-                        "從材質庫選定或新增材質，點擊 2D / 3D 視口中的構件即可直接貼附上色；按住 Alt 點擊可吸取構件材質",
-                    ),
-                    (
-                        ToolMode::PushPull,
-                        "幾何推拉 (Push-Pull) [P]",
-                        "選擇任意 3D 封閉平面，沿其法向量方向進行互動拉伸建模",
-                    ),
-                    (
-                        ToolMode::Space,
-                        "空間區域 (Space) [房間與坪數]",
-                        "在 2D 平面點選對角劃定空間區域 (客廳/臥室/廚房/衛浴等)，自動計算地坪面積與台灣坪數",
-                    ),
-                    (
-                        ToolMode::Furniture,
-                        "室內家具 (Furniture) [軟裝設備]",
-                        "放置床組、沙發、餐桌椅、廚具水槽、衛浴馬桶、衣櫃、書桌，以及電視、音響組與落地喇叭 (於工具列選擇品項，按 R 鍵旋轉)",
-                    ),
-                    (
-                        ToolMode::Outlet,
-                        "電源插座 (Outlet) [美規/歐規 · 110V/220V]",
-                        "移動至牆體旁點擊即安裝於該側牆面 (離地 300mm)；於工具列選擇美規 / 歐規、110V / 220V 與單插 / 雙插",
-                    ),
-                    (
-                        ToolMode::Model,
-                        "3D 模型百寶箱 (Model Library) [B]",
-                        "開啟模型百寶箱，從建築構件、家具、電器、盆栽、植物景觀、車輛、戶外設施與人物配景中挑選預建 3D 模型，在 2D 平面點擊放置 (按 R 旋轉)",
-                    ),
-                    (
-                        ToolMode::LightFixture,
-                        "照明燈具 (Lighting) [天花燈具]",
-                        "在天花板安裝嵌燈、客廳吊燈、軌道投射燈、吸頂燈或燈帶，設定流明與色溫",
-                    ),
-                ];
-
-                for (mode, title, desc) in tools {
-                    if tool_icon_button(ui, mode, self.tool_mode, title, desc) {
-                        self.tool_mode = mode;
-                        self.viewport_2d.wall_start_pt = None;
-                        self.viewport_2d.slab_start_pt = None;
-                        self.viewport_2d.ceiling_start_pt = None;
-                        self.viewport_2d.stair_start_pt = None;
-                        self.viewport_2d.railing_start_pt = None;
-                        self.viewport_2d.roof_start_pt = None;
-                        self.viewport_2d.ramp_start_pt = None;
-                        self.viewport_2d.curtain_wall_start_pt = None;
-                        self.viewport_2d.space_start_pt = None;
-                        self.viewport_2d.move_base_pt = None;
-                    }
-                }
-
-                ui.separator();
-                if ui
-                    .selectable_label(self.material_library.open || self.tool_mode == ToolMode::Paint, "🎨 材質庫")
-                    .on_hover_text("瀏覽內建材質、新增與管理自訂材質 (自訂材質會保存並用於所有專案)")
-                    .clicked()
-                {
-                    self.material_library.open = !(self.material_library.open || self.tool_mode == ToolMode::Paint);
-                    if !self.material_library.open && self.tool_mode == ToolMode::Paint {
-                        self.tool_mode = ToolMode::Select;
-                    }
-                }
-
-                if self.tool_mode == ToolMode::Furniture {
-                    ui.separator();
-                    egui::ComboBox::from_id_salt("place_furniture_kind")
-                        .selected_text(self.viewport_2d.furniture_cycle_kind.display_name())
-                        .show_ui(ui, |ui| {
-                            for k in sketchcad_bim::FurnitureKind::ALL {
-                                ui.selectable_value(&mut self.viewport_2d.furniture_cycle_kind, k, k.display_name());
-                            }
-                        })
-                        .response
-                        .on_hover_text("選擇要放置的家具或影音設備");
-                }
-                if self.tool_mode == ToolMode::Outlet {
-                    ui.separator();
-                    let vp = &mut self.viewport_2d;
-                    for standard in sketchcad_bim::PlugStandard::ALL {
-                        ui.selectable_value(&mut vp.outlet_standard, standard, standard.label());
-                    }
-                    ui.separator();
-                    for voltage in sketchcad_bim::OutletVoltage::ALL {
-                        ui.selectable_value(&mut vp.outlet_voltage, voltage, voltage.label());
-                    }
-                    ui.separator();
-                    ui.selectable_value(&mut vp.outlet_gangs, 1, "單插");
-                    ui.selectable_value(&mut vp.outlet_gangs, 2, "雙插");
-                }
-                if self.tool_mode == ToolMode::Window {
-                    ui.separator();
-                    egui::ComboBox::from_id_salt("place_window_type")
-                        .selected_text(self.viewport_2d.window_type.label())
-                        .show_ui(ui, |ui| {
-                            for t in sketchcad_bim::WindowType::ALL {
-                                ui.selectable_value(&mut self.viewport_2d.window_type, t, t.label());
-                            }
-                        })
-                        .response
-                        .on_hover_text("新放置窗戶的開窗型式；已放置的窗戶可於右側屬性面板變更窗型、窗框與玻璃");
-                }
-
-                ui.separator();
-
-                // Snap, Dimensions and 3D Section Cut toggles
-                ui.checkbox(&mut self.viewport_2d.snap_enabled, "端點吸附 (Snap)")
-                    .on_hover_text("開啟/關閉 2D 畫布的幾何端點吸附功能");
-                ui.checkbox(&mut self.viewport_2d.show_dimensions, "📐 尺寸標註 (Dimensions)")
-                    .on_hover_text("顯示或隱藏 2D 平面工程圖上的建築尺寸標註線與延伸界限輔助線");
-
-                ui.separator();
-                let cut_active = self.viewport_3d.settings.enable_section_cut;
-                if ui.selectable_label(cut_active, "🔪 3D 剖切盒").on_hover_text("開啟/關閉即時 3D 剖面切割 (透視室內裝修與家具格局)").clicked() {
-                    self.viewport_3d.settings.enable_section_cut = !self.viewport_3d.settings.enable_section_cut;
-                }
-
-
-                // Quick actions for selected element or clipboard
-                if self.selected_id.is_some() || self.clipboard.is_some() {
-                    ui.separator();
-                    if self.selected_id.is_some() {
-                        if ui.button("✂️ 剪下").on_hover_text("剪下選定構件 [Ctrl+X]").clicked() {
-                            self.cut();
-                        }
-                        if ui.button("📋 複製").on_hover_text("複製選定構件 [Ctrl+C]").clicked() {
-                            self.copy();
-                        }
-                    }
-                    if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("📄 貼上"))
-                        .on_hover_text("貼上剪貼簿中的構件 [Ctrl+V]")
-                        .clicked()
-                    {
-                        self.paste();
-                    }
-                    if let Some(id) = self.selected_id {
-                        if ui.button(egui::RichText::new("🗑️ 刪除構件").color(egui::Color32::from_rgb(255, 120, 120)))
-                            .on_hover_text("刪除目前選定的構件 [Delete / Backspace]")
-                            .clicked()
-                        {
-                            self.save_undo_state();
-                            self.doc.remove_element(id);
-                            self.selected_id = None;
-                            self.show_notify("已刪除選定構件");
-                        }
-                        if ui.button(egui::RichText::new("✥ 移動構件").color(egui::Color32::from_rgb(255, 215, 0)))
-                            .on_hover_text("切換至移動工具進行視口平移 [M]")
-                            .clicked()
-                        {
-                            self.tool_mode = ToolMode::Move;
-                            self.viewport_2d.move_base_pt = None;
-                        }
-                    }
-                }
-
-                ui.separator();
-
-                // Inspector Side Panel Toggle
-                let toggle_label = if self.show_inspector { "收合數據面板 ⏵" } else { "展開數據面板 ◧" };
-                if ui.button(toggle_label)
-                    .on_hover_text("收合或展開右側「即時數量與成本明細表」與「構件參數檢查器」面板")
-                    .clicked()
-                {
-                    self.show_inspector = !self.show_inspector;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some((msg, time)) = &self.notification {
-                        if time.elapsed().as_secs() < 5 {
-                            ui.colored_label(egui::Color32::from_rgb(80, 200, 120), msg);
-                        }
-                    }
-                });
-            });
+            self.render_ribbon(ui);
         });
 
         // 3. Bottom Status Bar (CAD Command line style)
@@ -1920,8 +1974,26 @@ pub(crate) fn setup_cjk_fonts(ctx: &egui::Context) {
     if loaded {
         ctx.set_fonts(fonts);
     } else {
-        eprintln!("   ⚠️ 未能找到系統中文字型，將使用預設字型。");
+        eprintln!("   ⚠ 未能找到系統中文字型，將使用預設字型。");
     }
+}
+
+/// Ribbon group: its controls in a row with a caption underneath, then a divider.
+fn ribbon_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.vertical(|ui| {
+        let row = ui.horizontal(|ui| {
+            ui.set_min_height(36.0);
+            add_contents(ui);
+        });
+        // Caption centred under the group's own width (not the unbounded scroll width)
+        let caption = egui::RichText::new(title).small().color(egui::Color32::from_rgb(140, 150, 165));
+        ui.allocate_ui_with_layout(
+            egui::vec2(row.response.rect.width(), 14.0),
+            egui::Layout::top_down(egui::Align::Center),
+            |ui| ui.label(caption),
+        );
+    });
+    ui.separator();
 }
 
 /// Custom CAD Tool Vector Icon Button with rich tooltip
@@ -2008,6 +2080,48 @@ pub(crate) fn material_swatch(ui: &mut egui::Ui, material: &Material, selected: 
             .small(),
         );
     })
+}
+
+/// Treasure chest (百寶箱) icon of the 3D model library: wooden chest with a domed lid,
+/// gold bands and a lock; it glints when the tool is active.
+pub(crate) fn draw_treasure_chest(painter: &egui::Painter, rect: egui::Rect, is_active: bool) {
+    let s = rect.width() / 32.0;
+    let p = |x: f32, y: f32| rect.min + egui::vec2(x * s, y * s);
+    let outline = egui::Stroke::new(1.2 * s, egui::Color32::from_rgb(60, 35, 15));
+    let wood = egui::Color32::from_rgb(150, 92, 42);
+    let lid_wood = egui::Color32::from_rgb(178, 112, 52);
+    let gold = if is_active { egui::Color32::from_rgb(255, 214, 80) } else { egui::Color32::from_rgb(222, 176, 58) };
+
+    // Chest body
+    let body = egui::Rect::from_min_max(p(5.5, 15.0), p(26.5, 26.5));
+    painter.rect(body, 1.5 * s, wood, outline, egui::StrokeKind::Middle);
+    // Domed lid: half ellipse over the body
+    let mut lid = vec![p(5.5, 15.0)];
+    for i in 0..=12 {
+        let a = std::f32::consts::PI * (1.0 - i as f32 / 12.0);
+        lid.push(p(16.0 + 10.5 * a.cos(), 15.0 - 8.0 * a.sin()));
+    }
+    painter.add(egui::Shape::convex_polygon(lid.clone(), lid_wood, outline));
+    // Gold bands: rim, two straps over lid and body
+    painter.line_segment([p(5.5, 15.0), p(26.5, 15.0)], egui::Stroke::new(2.0 * s, gold));
+    for x in [9.5f32, 22.5] {
+        let top = 15.0 - 8.0 * (1.0 - ((x - 16.0) / 10.5).powi(2)).max(0.0).sqrt();
+        painter.line_segment([p(x, top + 0.6), p(x, 26.0)], egui::Stroke::new(2.0 * s, gold));
+    }
+    // Lock plate with keyhole
+    let lock = egui::Rect::from_center_size(p(16.0, 17.0), egui::vec2(5.0 * s, 6.0 * s));
+    painter.rect(lock, 1.0 * s, gold, egui::Stroke::new(0.8 * s, egui::Color32::from_rgb(120, 85, 20)), egui::StrokeKind::Middle);
+    painter.circle_filled(p(16.0, 16.5), 0.9 * s, egui::Color32::from_rgb(50, 30, 10));
+    painter.line_segment([p(16.0, 16.5), p(16.0, 18.6)], egui::Stroke::new(0.8 * s, egui::Color32::from_rgb(50, 30, 10)));
+    if is_active {
+        // Sparkles of treasure
+        for (x, y, r) in [(27.5f32, 5.5f32, 2.2f32), (5.0, 6.5, 1.6)] {
+            let c = p(x, y);
+            let stroke = egui::Stroke::new(1.0 * s, egui::Color32::from_rgb(255, 240, 160));
+            painter.line_segment([c - egui::vec2(r * s, 0.0), c + egui::vec2(r * s, 0.0)], stroke);
+            painter.line_segment([c - egui::vec2(0.0, r * s), c + egui::vec2(0.0, r * s)], stroke);
+        }
+    }
 }
 
 /// Pure vector graphics renderer for CAD & BIM tool icons
@@ -2355,17 +2469,7 @@ fn draw_cad_icon(painter: &egui::Painter, rect: egui::Rect, mode: ToolMode, is_a
                 painter.circle_filled(c + egui::vec2(0.0, 2.5), 0.9, accent_color);
             }
         }
-        ToolMode::Model => {
-            // Isometric cube (the model library's box of ready-made models)
-            let c = rect.center();
-            let top = [c + egui::vec2(0.0, -10.0), c + egui::vec2(9.0, -5.0), c + egui::vec2(0.0, 0.0), c + egui::vec2(-9.0, -5.0)];
-            let left = [c + egui::vec2(-9.0, -5.0), c + egui::vec2(0.0, 0.0), c + egui::vec2(0.0, 10.0), c + egui::vec2(-9.0, 5.0)];
-            let right = [c + egui::vec2(0.0, 0.0), c + egui::vec2(9.0, -5.0), c + egui::vec2(9.0, 5.0), c + egui::vec2(0.0, 10.0)];
-            let stroke = egui::Stroke::new(1.3, stroke_color);
-            painter.add(egui::Shape::convex_polygon(top.to_vec(), accent_color, stroke));
-            painter.add(egui::Shape::convex_polygon(left.to_vec(), egui::Color32::from_rgb(70, 78, 92), stroke));
-            painter.add(egui::Shape::convex_polygon(right.to_vec(), egui::Color32::from_rgb(95, 105, 122), stroke));
-        }
+        ToolMode::Model => draw_treasure_chest(painter, rect, is_active),
         ToolMode::Paint => {
             // Tilted paint bucket pouring a drip of paint
             let o = rect.min;

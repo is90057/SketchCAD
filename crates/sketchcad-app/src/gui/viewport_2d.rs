@@ -362,7 +362,7 @@ impl Viewport2D {
             }
         }
 
-        // 5d. Space Room Tags & Area Stamps (🏷️ 房間區域標籤與坪數標記)
+        // 5d. Space Room Tags & Area Stamps (🏷 房間區域標籤與坪數標記)
         for &(si, off) in &layout {
             for &id in &self.plan.sheets[si].members {
                 let Some(sp) = doc.get_space(id) else { continue };

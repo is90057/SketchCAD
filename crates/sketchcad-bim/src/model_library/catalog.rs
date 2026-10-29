@@ -44,6 +44,11 @@ const HAIR: Paint = rgb(50, 38, 30);
 const DENIM: Paint = rgb(55, 70, 100);
 const TIRE: Paint = rgb(32, 32, 34);
 const FABRIC_GREY: Paint = rgb(150, 150, 155);
+const QUARTZ: Paint = rgb(228, 225, 218);
+const STEEL_DARK: Paint = rgb(118, 123, 128);
+const BREAD: Paint = rgb(215, 170, 110);
+const GRAPE: Paint = rgb(110, 50, 120);
+const BANANA: Paint = rgb(240, 205, 70);
 
 macro_rules! model {
     ($id:literal, $name:literal, $cat:ident, $body:expr, $price:expr, $elev:expr, $build:ident) => {
@@ -90,6 +95,25 @@ pub static CATALOG: &[ModelSpec] = &[
     model!("electric_fan", "立扇 (Electric Fan)", Appliance, [235, 235, 232, 255], 2400.0, 0.0, electric_fan),
     model!("desktop_pc", "桌上型電腦 (Desktop PC)", Appliance, [40, 40, 44, 255], 42000.0, 750.0, desktop_pc),
     model!("water_dispenser", "飲水機 (Water Dispenser)", Appliance, [240, 240, 238, 255], 9800.0, 0.0, water_dispenser),
+    // 廚房用品
+    model!("kitchen_run", "一字型系統廚具 (Kitchen Run 2.4m)", Kitchen, [236, 233, 226, 255], 168000.0, 0.0, kitchen_run),
+    model!("kitchen_island", "中島吧台 (Kitchen Island)", Kitchen, [140, 100, 70, 255], 98000.0, 0.0, kitchen_island),
+    model!("wall_cabinet", "廚房吊櫃 (Wall Cabinet 1.8m)", Kitchen, [236, 233, 226, 255], 42000.0, 1450.0, wall_cabinet),
+    model!("range_hood", "抽油煙機 (Range Hood)", Kitchen, [196, 199, 202, 255], 18800.0, 1550.0, range_hood),
+    model!("gas_hob", "雙口瓦斯爐 (Gas Hob)", Kitchen, [28, 28, 32, 255], 15800.0, 900.0, gas_hob),
+    model!("oven", "烤箱 (Countertop Oven)", Kitchen, [196, 199, 202, 255], 8900.0, 900.0, oven),
+    model!("dishwasher", "洗碗機 (Dishwasher)", Kitchen, [196, 199, 202, 255], 36000.0, 0.0, dishwasher),
+    model!("double_sink", "不鏽鋼雙槽水槽 (Double Sink)", Kitchen, [200, 203, 206, 255], 12500.0, 900.0, double_sink),
+    model!("kettle", "電熱水壺 (Electric Kettle)", Kitchen, [200, 203, 206, 255], 1490.0, 900.0, kettle),
+    model!("espresso_machine", "義式咖啡機 (Espresso Machine)", Kitchen, [196, 199, 202, 255], 24800.0, 900.0, espresso_machine),
+    model!("toaster", "烤麵包機 (Toaster)", Kitchen, [200, 60, 50, 255], 1990.0, 900.0, toaster),
+    model!("blender", "果汁機 (Blender)", Kitchen, [45, 45, 48, 255], 3290.0, 900.0, blender),
+    model!("cookware", "鍋具組 (Pot & Pan Set)", Kitchen, [200, 203, 206, 255], 4800.0, 900.0, cookware),
+    model!("knife_board", "砧板與刀座 (Cutting Board & Knives)", Kitchen, [190, 145, 95, 255], 2600.0, 900.0, knife_board),
+    model!("dish_rack", "碗盤瀝水架 (Dish Rack)", Kitchen, [235, 235, 232, 255], 1280.0, 900.0, dish_rack),
+    model!("fruit_bowl", "水果盤 (Fruit Bowl)", Kitchen, [240, 238, 230, 255], 980.0, 750.0, fruit_bowl),
+    model!("spice_rack", "調味料架 (Spice Rack)", Kitchen, [160, 115, 75, 255], 1680.0, 900.0, spice_rack),
+    model!("pedal_bin", "腳踏式垃圾桶 (Pedal Bin)", Kitchen, [196, 199, 202, 255], 1890.0, 0.0, pedal_bin),
     // 盆栽
     model!("monstera", "龜背芋 (Monstera)", PottedPlant, [190, 110, 80, 255], 2800.0, 0.0, monstera),
     model!("snake_plant", "虎尾蘭 (Snake Plant)", PottedPlant, [120, 120, 118, 255], 1500.0, 0.0, snake_plant),
@@ -481,6 +505,243 @@ fn water_dispenser(k: &mut Kit) {
     k.cuboid([-110.0, -200.0, 450.0], [110.0, -170.0, 480.0], CHROME);
     k.cylinder([0.0, 0.0, 1000.0], [0.0, 0.0, 1380.0], 135.0, 20, WATER);
     k.frustum([0.0, 0.0, 1380.0], [0.0, 0.0, 1450.0], 135.0, 50.0, 20, WATER);
+}
+
+// ───────────────────────────── 廚房用品 ─────────────────────────────
+
+/// Counter-height base cabinets with a quartz top, a sink with faucet and a built-in hob.
+fn kitchen_run(k: &mut Kit) {
+    k.cuboid([-1200.0, -270.0, 0.0], [1200.0, 300.0, 100.0], DARK);
+    k.cuboid([-1200.0, -300.0, 100.0], [1200.0, 300.0, 860.0], BODY);
+    for x in [-600.0, 0.0, 600.0] {
+        k.cuboid([x - 2.0, -306.0, 110.0], [x + 2.0, -299.0, 850.0], DARK);
+    }
+    k.cuboid([-1195.0, -306.0, 698.0], [1195.0, -299.0, 702.0], DARK);
+    for cx in [-900.0, -300.0, 300.0, 900.0] {
+        k.cuboid([cx - 80.0, -320.0, 760.0], [cx + 80.0, -306.0, 774.0], CHROME);
+        k.cuboid([cx - 80.0, -320.0, 600.0], [cx + 80.0, -306.0, 614.0], CHROME);
+    }
+    k.cuboid([-1210.0, -320.0, 860.0], [1210.0, 310.0, 900.0], QUARTZ);
+    // Sink basin and gooseneck faucet
+    k.cuboid([-760.0, -220.0, 899.0], [-240.0, 190.0, 903.0], CHROME);
+    k.cuboid([-730.0, -190.0, 902.0], [-270.0, 160.0, 905.0], STEEL_DARK);
+    k.cylinder([-500.0, 240.0, 900.0], [-500.0, 240.0, 1180.0], 18.0, 12, CHROME);
+    k.sphere([-500.0, 240.0, 1180.0], 22.0, CHROME);
+    k.cylinder([-500.0, 240.0, 1180.0], [-500.0, 80.0, 1160.0], 14.0, 10, CHROME);
+    k.cylinder([-500.0, 80.0, 1160.0], [-500.0, 80.0, 1110.0], 14.0, 10, CHROME);
+    // Glass-ceramic hob with four burners
+    k.cuboid([250.0, -230.0, 900.0], [850.0, 230.0, 906.0], BLACK);
+    for (x, y) in [(400.0, -90.0), (700.0, -90.0), (400.0, 100.0), (700.0, 100.0)] {
+        k.cylinder([x, y, 906.0], [x, y, 909.0], 80.0, 20, DARK_METAL);
+    }
+}
+
+fn kitchen_island(k: &mut Kit) {
+    k.cuboid([-900.0, -400.0, 0.0], [900.0, 450.0, 880.0], BODY);
+    for x in [-450.0, 0.0, 450.0] {
+        k.cuboid([x - 2.0, 450.0, 60.0], [x + 2.0, 457.0, 860.0], DARK_WOOD);
+    }
+    for cx in [-675.0, -225.0, 225.0, 675.0] {
+        k.cuboid([cx - 70.0, 457.0, 780.0], [cx + 70.0, 470.0, 794.0], BRASS);
+    }
+    // Quartz top overhanging toward the seating side (front, −Y)
+    k.cuboid([-1000.0, -720.0, 880.0], [1000.0, 520.0, 920.0], QUARTZ);
+}
+
+fn wall_cabinet(k: &mut Kit) {
+    k.cuboid([-850.0, -160.0, 0.0], [850.0, -140.0, 8.0], LAMP_GLOW);
+    k.cuboid([-900.0, -175.0, 8.0], [900.0, 175.0, 708.0], BODY);
+    for x in [-450.0, 0.0, 450.0] {
+        k.cuboid([x - 2.0, -181.0, 18.0], [x + 2.0, -174.0, 698.0], DARK);
+    }
+    for cx in [-675.0, -225.0, 225.0, 675.0] {
+        k.cuboid([cx - 60.0, -195.0, 40.0], [cx + 60.0, -181.0, 52.0], CHROME);
+    }
+}
+
+fn range_hood(k: &mut Kit) {
+    k.cuboid([-400.0, -220.0, 0.0], [-20.0, 220.0, 5.0], DARK);
+    k.cuboid([20.0, -220.0, 0.0], [400.0, 220.0, 5.0], DARK);
+    k.cuboid([-450.0, -260.0, 5.0], [450.0, 260.0, 65.0], BODY);
+    k.cuboid([-350.0, -180.0, 65.0], [350.0, 240.0, 200.0], BODY);
+    k.cuboid([-150.0, -60.0, 200.0], [150.0, 240.0, 900.0], BODY);
+    for i in 0..3 {
+        let x = 200.0 + i as f64 * 50.0;
+        k.cuboid([x - 15.0, -266.0, 25.0], [x + 15.0, -260.0, 45.0], if i == 0 { GLOW } else { DARK });
+    }
+}
+
+fn gas_hob(k: &mut Kit) {
+    k.cuboid([-380.0, -260.0, 0.0], [380.0, 260.0, 12.0], BODY);
+    for x in [-180.0, 180.0] {
+        k.cylinder([x, 30.0, 12.0], [x, 30.0, 30.0], 90.0, 20, DARK_METAL);
+        k.cylinder([x, 30.0, 30.0], [x, 30.0, 40.0], 45.0, 16, BLACK);
+        k.cuboid([x - 130.0, 22.0, 40.0], [x + 130.0, 38.0, 55.0], DARK_METAL);
+        k.cuboid([x - 8.0, -100.0, 40.0], [x + 8.0, 160.0, 55.0], DARK_METAL);
+        k.cylinder([x, -200.0, 12.0], [x, -200.0, 32.0], 24.0, 14, CHROME);
+    }
+}
+
+fn oven(k: &mut Kit) {
+    for x in [-230.0, 210.0] {
+        k.cuboid([x, -170.0, 0.0], [x + 20.0, 170.0, 10.0], BLACK);
+    }
+    k.cuboid([-260.0, -200.0, 10.0], [260.0, 200.0, 330.0], BODY);
+    k.cuboid([-235.0, -205.0, 50.0], [130.0, -200.0, 290.0], GLASS);
+    k.cuboid([-215.0, -228.0, 262.0], [110.0, -205.0, 276.0], CHROME);
+    for z in [100.0, 170.0, 240.0] {
+        k.cylinder([195.0, -200.0, z], [195.0, -224.0, z], 18.0, 14, BLACK);
+    }
+}
+
+fn dishwasher(k: &mut Kit) {
+    k.cuboid([-300.0, -300.0, 0.0], [300.0, 300.0, 820.0], BODY);
+    k.cuboid([-295.0, -305.0, 740.0], [295.0, -300.0, 815.0], DARK);
+    k.cuboid([150.0, -307.0, 765.0], [240.0, -304.0, 790.0], GLOW);
+    for x in [-220.0, 220.0] {
+        k.cylinder([x, -300.0, 700.0], [x, -325.0, 700.0], 8.0, 8, CHROME);
+    }
+    k.cylinder([-230.0, -325.0, 700.0], [230.0, -325.0, 700.0], 12.0, 12, CHROME);
+    k.cuboid([-300.0, -305.0, 0.0], [300.0, -300.0, 90.0], DARK);
+}
+
+fn double_sink(k: &mut Kit) {
+    k.cuboid([-420.0, -240.0, 0.0], [420.0, 240.0, 15.0], BODY);
+    for x0 in [-400.0, 20.0] {
+        k.cuboid([x0, -200.0, 12.0], [x0 + 380.0, 170.0, 17.0], STEEL_DARK);
+        k.cylinder([x0 + 190.0, -15.0, 16.0], [x0 + 190.0, -15.0, 18.0], 30.0, 14, CHROME);
+    }
+    k.cylinder([0.0, 215.0, 15.0], [0.0, 215.0, 45.0], 30.0, 16, CHROME);
+    k.cylinder([0.0, 215.0, 45.0], [0.0, 215.0, 350.0], 16.0, 12, CHROME);
+    // Gooseneck arc over to the spout
+    let arc = |a: f64| [0.0, 140.0 + 75.0 * a.cos(), 350.0 + 75.0 * a.sin()];
+    for i in 0..8 {
+        let (a0, a1) = (i as f64 / 8.0 * PI, (i + 1) as f64 / 8.0 * PI);
+        k.cylinder(arc(a0), arc(a1), 14.0, 10, CHROME);
+    }
+    k.cylinder([0.0, 65.0, 350.0], [0.0, 65.0, 300.0], 15.0, 10, CHROME);
+    k.cuboid([30.0, 200.0, 280.0], [110.0, 230.0, 295.0], CHROME);
+}
+
+fn kettle(k: &mut Kit) {
+    k.cylinder([0.0, 0.0, 0.0], [0.0, 0.0, 25.0], 100.0, 20, BLACK);
+    k.frustum([0.0, 0.0, 25.0], [0.0, 0.0, 230.0], 88.0, 70.0, 20, BODY);
+    k.ellipsoid([0.0, 0.0, 230.0], [70.0, 70.0, 22.0], BLACK);
+    k.cuboid([85.0, -15.0, 60.0], [118.0, 15.0, 225.0], BLACK);
+    k.cuboid([55.0, -15.0, 205.0], [118.0, 15.0, 228.0], BLACK);
+    k.frustum([-75.0, 0.0, 170.0], [-130.0, 0.0, 215.0], 20.0, 10.0, 10, BODY);
+}
+
+fn espresso_machine(k: &mut Kit) {
+    k.cuboid([-170.0, -150.0, 0.0], [170.0, 170.0, 380.0], BODY);
+    k.cuboid([-125.0, -240.0, 0.0], [125.0, -150.0, 30.0], DARK);
+    k.cylinder([0.0, -175.0, 300.0], [0.0, -175.0, 268.0], 42.0, 16, CHROME);
+    k.cylinder([0.0, -175.0, 258.0], [0.0, -330.0, 250.0], 12.0, 10, BLACK);
+    k.cylinder([0.0, -175.0, 268.0], [0.0, -175.0, 250.0], 36.0, 16, CHROME);
+    k.frustum([0.0, -190.0, 30.0], [0.0, -190.0, 100.0], 30.0, 38.0, 16, WHITE);
+    k.cylinder([130.0, -160.0, 300.0], [145.0, -210.0, 150.0], 6.0, 8, CHROME);
+    k.cylinder([-90.0, -150.0, 320.0], [-90.0, -158.0, 320.0], 32.0, 16, WHITE);
+    for x in [60.0, 100.0] {
+        k.cuboid([x - 12.0, -156.0, 335.0], [x + 12.0, -150.0, 350.0], DARK);
+    }
+}
+
+fn toaster(k: &mut Kit) {
+    k.cuboid([-140.0, -90.0, 0.0], [140.0, 90.0, 190.0], BODY);
+    for y in [-50.0, 25.0] {
+        k.cuboid([-110.0, y, 188.0], [110.0, y + 25.0, 192.0], BLACK);
+        k.cuboid([-95.0, y + 6.0, 175.0], [95.0, y + 19.0, 235.0], BREAD);
+    }
+    k.cuboid([140.0, -15.0, 120.0], [162.0, 15.0, 140.0], BLACK);
+    k.cylinder([-60.0, -90.0, 60.0], [-60.0, -105.0, 60.0], 16.0, 12, CHROME);
+}
+
+fn blender(k: &mut Kit) {
+    k.cuboid([-90.0, -90.0, 0.0], [90.0, 90.0, 150.0], BODY);
+    for (i, x) in [-40.0, 0.0, 40.0].into_iter().enumerate() {
+        k.cylinder([x, -90.0, 70.0], [x, -100.0, 70.0], 12.0, 12, if i == 1 { GLOW } else { CHROME });
+    }
+    k.frustum([0.0, 0.0, 150.0], [0.0, 0.0, 420.0], 70.0, 90.0, 20, rgb(200, 222, 230));
+    k.cylinder([0.0, 0.0, 420.0], [0.0, 0.0, 445.0], 93.0, 20, BLACK);
+    k.cuboid([82.0, -15.0, 200.0], [125.0, 15.0, 390.0], BLACK);
+}
+
+fn cookware(k: &mut Kit) {
+    k.cylinder([-170.0, 0.0, 0.0], [-170.0, 0.0, 170.0], 120.0, 24, BODY);
+    k.ellipsoid([-170.0, 0.0, 170.0], [122.0, 122.0, 25.0], CHROME);
+    k.sphere([-170.0, 0.0, 198.0], 14.0, BLACK);
+    for side in [-1.0, 1.0] {
+        k.cuboid([-170.0 + side * 120.0 - 25.0, -18.0, 130.0], [-170.0 + side * 120.0 + 25.0, 18.0, 148.0], BLACK);
+    }
+    k.frustum([170.0, 0.0, 0.0], [170.0, 0.0, 50.0], 110.0, 135.0, 24, BLACK);
+    k.cylinder([300.0, 0.0, 42.0], [520.0, 0.0, 60.0], 14.0, 10, BLACK);
+}
+
+fn knife_board(k: &mut Kit) {
+    k.cuboid([-250.0, -160.0, 0.0], [150.0, 160.0, 25.0], BODY);
+    k.cuboid([-180.0, -62.0, 25.0], [60.0, -32.0, 28.0], CHROME);
+    k.cuboid([60.0, -64.0, 25.0], [170.0, -30.0, 45.0], BLACK);
+    for (x, y) in [(-120.0, 60.0), (-60.0, 80.0), (-90.0, 20.0)] {
+        k.sphere([x, y, 60.0], 35.0, RED);
+    }
+    k.tilted_box([270.0, 60.0, 120.0], [120.0, 150.0, 240.0], 0.0, -15.0, DARK_WOOD);
+    for (i, x) in [235.0, 260.0, 285.0, 310.0].into_iter().enumerate() {
+        k.cylinder([x, 70.0, 230.0], [x, 85.0 + i as f64 * 3.0, 330.0], 11.0, 8, BLACK);
+    }
+}
+
+fn dish_rack(k: &mut Kit) {
+    k.cuboid([-230.0, -160.0, 0.0], [230.0, 160.0, 25.0], BODY);
+    for (x, y) in [(-220.0, -150.0), (220.0, -150.0), (-220.0, 150.0), (220.0, 150.0)] {
+        k.cylinder([x, y, 25.0], [x, y, 170.0], 5.0, 6, CHROME);
+    }
+    for y in [-150.0, 150.0] {
+        k.cylinder([-220.0, y, 170.0], [220.0, y, 170.0], 5.0, 6, CHROME);
+    }
+    for i in 0..5 {
+        let x = -180.0 + i as f64 * 42.0;
+        k.cylinder([x - 4.0, -20.0, 140.0], [x + 4.0, -20.0, 140.0], 110.0, 24, WHITE);
+    }
+    for (y, z) in [(-60.0, 25.0), (60.0, 25.0)] {
+        k.frustum([140.0, y, z], [140.0, y, z + 65.0], 75.0, 45.0, 18, WHITE);
+    }
+}
+
+fn fruit_bowl(k: &mut Kit) {
+    k.frustum([0.0, 0.0, 0.0], [0.0, 0.0, 90.0], 90.0, 170.0, 24, BODY);
+    for (x, y) in [(-60.0, -40.0), (50.0, -55.0), (0.0, 60.0)] {
+        k.sphere([x, y, 115.0], 45.0, RED);
+    }
+    k.sphere([70.0, 40.0, 118.0], 48.0, ORANGE);
+    for i in 0..3 {
+        k.leaf([-40.0 + i as f64 * 12.0, 10.0, 165.0 + i as f64 * 8.0], [120.0, 25.0, 20.0], 20.0 + i as f64 * 8.0, 0.0, BANANA);
+    }
+    for (x, y, z) in [(-100.0, 50.0, 110.0), (-115.0, 25.0, 112.0), (-90.0, 25.0, 125.0), (-110.0, 45.0, 135.0), (-95.0, 70.0, 118.0)] {
+        k.sphere([x, y, z], 16.0, GRAPE);
+    }
+}
+
+fn spice_rack(k: &mut Kit) {
+    const LIDS: [Paint; 5] = [RED, BLACK, GREEN, ORANGE, rgb(120, 70, 40)];
+    for x in [-210.0, 200.0] {
+        k.cuboid([x, -60.0, 0.0], [x + 10.0, 60.0, 290.0], BODY);
+    }
+    for z in [0.0, 150.0] {
+        k.cuboid([-200.0, -60.0, z], [200.0, 60.0, z + 15.0], BODY);
+        for i in 0..5 {
+            let x = -160.0 + i as f64 * 80.0;
+            k.cylinder([x, 0.0, z + 15.0], [x, 0.0, z + 105.0], 25.0, 14, rgb(230, 225, 210));
+            k.cylinder([x, 0.0, z + 105.0], [x, 0.0, z + 125.0], 26.0, 14, LIDS[(i + z as usize / 150) % LIDS.len()]);
+        }
+    }
+    k.cuboid([-200.0, -64.0, 40.0], [200.0, -58.0, 55.0], BODY);
+}
+
+fn pedal_bin(k: &mut Kit) {
+    k.cylinder([0.0, 0.0, 0.0], [0.0, 0.0, 22.0], 165.0, 24, BLACK);
+    k.cylinder([0.0, 0.0, 22.0], [0.0, 0.0, 600.0], 160.0, 24, BODY);
+    k.ellipsoid([0.0, 0.0, 600.0], [162.0, 162.0, 32.0], CHROME);
+    k.cuboid([-60.0, -205.0, 8.0], [60.0, -150.0, 38.0], BLACK);
 }
 
 // ───────────────────────────── 盆栽 ─────────────────────────────
