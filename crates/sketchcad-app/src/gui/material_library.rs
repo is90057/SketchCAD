@@ -11,18 +11,21 @@ use sketchcad_geom::Color;
 use crate::gui::app::{material_swatch, SketchCadApp};
 use crate::gui::viewport_2d::ToolMode;
 
-/// Where the user's own materials are stored between sessions.
-fn user_library_path() -> Option<PathBuf> {
+/// Per-user application data folder (material and model libraries).
+pub(crate) fn app_data_dir() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
     if cfg!(target_os = "windows") {
-        var("APPDATA").map(|d| d.join("SketchCAD").join("materials.json"))
+        var("APPDATA").map(|d| d.join("SketchCAD"))
     } else if cfg!(target_os = "macos") {
-        var("HOME").map(|h| h.join("Library/Application Support/SketchCAD/materials.json"))
+        var("HOME").map(|h| h.join("Library/Application Support/SketchCAD"))
     } else {
-        var("XDG_CONFIG_HOME")
-            .or_else(|| var("HOME").map(|h| h.join(".config")))
-            .map(|d| d.join("sketchcad").join("materials.json"))
+        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config"))).map(|d| d.join("sketchcad"))
     }
+}
+
+/// Where the user's own materials are stored between sessions.
+fn user_library_path() -> Option<PathBuf> {
+    app_data_dir().map(|d| d.join("materials.json"))
 }
 
 /// Material being created or edited in the library window.

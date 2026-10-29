@@ -2,7 +2,7 @@ use crate::gui::inspector::{InspectorPanel, InspectorState};
 use crate::gui::material_library::MaterialLibraryState;
 use crate::gui::model_browser::ModelBrowserState;
 use crate::gui::viewport_2d::{ToolMode, Viewport2D};
-use crate::gui::viewport_3d::Viewport3D;
+use crate::gui::viewport_3d::{ModelAction, Viewport3D};
 use eframe::egui;
 use sketchcad_bim::{
     Beam, BimDocument, Column, CurtainWall, Door, FurnitureKind, LightType, Material, Ramp, Roof,
@@ -113,7 +113,7 @@ impl SketchCadApp {
             updater,
             paint_material: Material::brick(),
             material_library: MaterialLibraryState::load(),
-            model_browser: ModelBrowserState::default(),
+            model_browser: ModelBrowserState::load(),
         }
     }
 
@@ -364,6 +364,50 @@ impl SketchCadApp {
         self.save_undo_state();
         self.doc.paint_element(id, self.paint_material.clone());
         self.show_notify(format!("🎨 已將「{}」貼附至 {}", self.paint_material.name, elem_name));
+    }
+
+    /// Applies a model-library edit made in the 3D view.
+    fn apply_model_action(&mut self, action: ModelAction) {
+        match action {
+            ModelAction::Place { model_id, position, base_z, rotation_deg } => {
+                self.save_undo_state();
+                if let Some(id) = self.doc.insert_model(&model_id, position, rotation_deg) {
+                    if let Some(m) = self.doc.get_model_mut(id) {
+                        m.base_z = base_z;
+                    }
+                    self.selected_id = Some(id);
+                    let name = self.doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
+                    self.status_text = format!("✔ 已於 3D 視圖放置模型: {name} (高程 {base_z:.0} mm)");
+                }
+            }
+            ModelAction::BeginMove(_) => self.save_undo_state(),
+            ModelAction::MoveTo { id, position, base_z } => {
+                if let Some(m) = self.doc.get_model_mut(id) {
+                    m.position = position;
+                    m.base_z = base_z;
+                }
+            }
+            ModelAction::Rotate(id, delta) => {
+                self.save_undo_state();
+                if let Some(m) = self.doc.get_model_mut(id) {
+                    m.rotation_deg = (m.rotation_deg + delta).rem_euclid(360.0);
+                }
+            }
+            ModelAction::Duplicate(id) => {
+                if let Some(source) = self.doc.get_element(id).map(|e| e.clone_box()) {
+                    self.save_undo_state();
+                    let copy = self.doc.paste_element(source.as_ref(), sketchcad_core::Vector3D::new(600.0, 600.0, 0.0));
+                    self.selected_id = Some(copy);
+                    self.show_notify("已複製模型");
+                }
+            }
+            ModelAction::Delete(id) => {
+                self.save_undo_state();
+                self.doc.remove_element(id);
+                self.selected_id = None;
+                self.show_notify("已刪除模型");
+            }
+        }
     }
 
     pub fn save_undo_state(&mut self) {
@@ -1071,6 +1115,9 @@ impl eframe::App for SketchCadApp {
                 } else if i.key_pressed(egui::Key::T) {
                     self.tool_mode = ToolMode::Ceiling;
                     self.viewport_2d.ceiling_start_pt = None;
+                } else if i.key_pressed(egui::Key::R) && self.tool_mode == ToolMode::Model && self.layout == ViewLayout::Orbit3DOnly {
+                    // The 2D view (which normally turns the piece) is hidden: rotate here
+                    self.viewport_2d.furniture_rotation = (self.viewport_2d.furniture_rotation + std::f64::consts::FRAC_PI_2) % std::f64::consts::TAU;
                 } else if i.key_pressed(egui::Key::R) && !matches!(self.tool_mode, ToolMode::Furniture | ToolMode::Model) {
                     // In the Furniture and Model tools R rotates the piece being placed instead
                     self.tool_mode = ToolMode::Stairs;
@@ -1586,7 +1633,7 @@ impl eframe::App for SketchCadApp {
                     ToolMode::Furniture => "_FURNITURE [在平面圖點擊以放置家具，按 R 鍵可旋轉 90° 方向]",
                     ToolMode::LightFixture => "_LIGHT [在平面圖點擊天花板位置以安裝照明燈具]",
                     ToolMode::Paint => "_PAINT [點擊 2D / 3D 視口中的構件貼附目前材質；Alt + 點擊吸取材質]",
-                    ToolMode::Model => "_MODEL [從模型百寶箱選擇模型後在 2D 平面點擊放置，按 R 鍵旋轉 90°]",
+                    ToolMode::Model => "_MODEL [從模型百寶箱選擇模型後在 2D 平面或 3D 視圖點擊放置 (3D 點牆面自動靠牆)，按 R 鍵旋轉 90°]",
                     ToolMode::Outlet => "_OUTLET [移動至牆體旁點擊，於滑鼠所在側牆面安裝電源插座]",
                 };
 
@@ -1726,6 +1773,10 @@ impl eframe::App for SketchCadApp {
 
         // 5. Central Viewport(s)
         let mut clicked_element = None;
+        // The 3D view places the model chosen in the model library while the Model tool is on
+        self.viewport_3d.placing_model = (self.tool_mode == ToolMode::Model).then(|| self.viewport_2d.model_id.clone().unwrap_or_default());
+        self.viewport_3d.placing_rotation_deg = self.viewport_2d.furniture_rotation.to_degrees();
+
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.layout {
                 ViewLayout::Split2D3D => {
@@ -1767,6 +1818,10 @@ impl eframe::App for SketchCadApp {
                 }
             }
         });
+
+        for action in self.viewport_3d.take_model_actions() {
+            self.apply_model_action(action);
+        }
 
         if self.tool_mode == ToolMode::Paint {
             if let Some(id) = clicked_element {

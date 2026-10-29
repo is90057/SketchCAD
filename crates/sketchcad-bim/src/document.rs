@@ -456,8 +456,8 @@ impl BimDocument {
 
     /// Place a model from the 3D model library (模型百寶箱). Returns `None` for an unknown id.
     pub fn insert_model(&mut self, model_id: &str, position: sketchcad_core::Point2D, rotation_deg: f64) -> Option<ElementId> {
-        let spec = crate::ModelSpec::find(model_id)?;
-        let id = self.add_element(ModelComponent::new(spec, position, rotation_deg));
+        let model = crate::model_library::find_model(model_id)?;
+        let id = self.add_element(ModelComponent::new(&model, position, rotation_deg));
         self.sync();
         Some(id)
     }
@@ -1073,11 +1073,39 @@ impl BimDocument {
                 .iter()
                 .map(|(id, material)| PaintedElement { element: *id, material: material.clone() })
                 .collect(),
+            custom_models: self.custom_models_in_use(),
         }
+    }
+
+    /// User library models referenced by placed model components.
+    pub fn custom_models_in_use(&self) -> Vec<crate::CustomModel> {
+        let mut models: Vec<crate::CustomModel> = Vec::new();
+        for elem in self.get_elements_by_kind(ElementKind::Model) {
+            let Some(model) = elem.as_any().downcast_ref::<ModelComponent>().and_then(|m| m.model()) else { continue };
+            if let crate::ModelRef::Custom(entry) = model {
+                if !models.iter().any(|m| m.id == entry.model.id) {
+                    models.push(entry.model.clone());
+                }
+            }
+        }
+        models
+    }
+
+    /// World mesh of an element with every triangle coloured as displayed (paint, model
+    /// colours or the kind's palette), e.g. to turn elements into a library model.
+    pub fn element_mesh_with_colors(&self, id: ElementId) -> Option<TriangleMesh> {
+        let elem = self.get_element(id)?;
+        let mut mesh = elem.to_3d_mesh();
+        let base = self.display_rgba(id).unwrap_or_else(|| elem.kind().display_rgba());
+        mesh.face_colors = (0..mesh.triangle_count()).map(|i| Some(mesh.face_color(i).unwrap_or(base))).collect();
+        Some(mesh)
     }
 
     /// Reconstruct a BimDocument from a SketchCadProject
     pub fn from_project(project: SketchCadProject) -> Self {
+        for model in project.custom_models {
+            crate::register_custom_model(model);
+        }
         let mut doc = Self::new(project.name);
         for ser_elem in project.elements {
             doc.add_boxed_element(ser_elem.into_boxed_element());
@@ -1311,6 +1339,28 @@ mod tests {
         assert_eq!(loaded.display_rgba(car), Some([240, 240, 235, 255]), "paint recolours the body");
         assert_eq!(loaded.display_rgba(tree), crate::ModelSpec::find("broadleaf_tree").map(|s| s.body_color));
         assert_eq!(loaded.get_element(tree).unwrap().to_3d_mesh(), doc.get_element(tree).unwrap().to_3d_mesh());
+        assert!(doc.to_project().custom_models.is_empty(), "built-in models are not embedded");
+    }
+
+    #[test]
+    fn projects_carry_the_custom_models_they_use() {
+        let mut doc = BimDocument::new("Custom");
+        let wall = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(2000.0, 0.0), 200.0, 3000.0, Material::concrete()));
+        let mesh = doc.element_mesh_with_colors(wall).unwrap();
+        assert!(mesh.face_colors.iter().all(Option::is_some));
+        let model = crate::CustomModel::from_mesh("Wall block", crate::ModelCategory::Architecture, mesh);
+        crate::register_custom_model(model.clone());
+        let placed = doc.insert_model(&model.id, Point2D::new(5000.0, 0.0), 0.0).unwrap();
+
+        let project = doc.to_project();
+        assert_eq!(project.custom_models, vec![model.clone()]);
+        // Opening the file on a machine without the model registers it again
+        crate::unregister_custom_model(&model.id);
+        let json = serde_json::to_string(&project).unwrap();
+        let loaded = BimDocument::from_project(serde_json::from_str(&json).unwrap());
+        assert!(crate::find_model(&model.id).is_some());
+        assert_eq!(loaded.get_element(placed).unwrap().to_3d_mesh().triangle_count(), 12);
+        crate::unregister_custom_model(&model.id);
     }
 
     #[test]

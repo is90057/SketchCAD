@@ -1,6 +1,6 @@
 use crate::cost::{CostLineItem, QuantityTakeoff};
 use crate::element::{BimElement, ElementKind};
-use crate::model_library::{ModelCategory, ModelSpec};
+use crate::model_library::{find_model, ModelCategory, ModelRef};
 use serde::{Deserialize, Serialize};
 use sketchcad_core::{ElementId, Point2D, Point3D, Vector3D};
 use sketchcad_geom::{Polyline2D, TriangleMesh};
@@ -22,30 +22,31 @@ pub struct ModelComponent {
 
 impl ModelComponent {
     /// New instance of catalogue model `spec` at its default elevation and price.
-    pub fn new(spec: &ModelSpec, position: Point2D, rotation_deg: f64) -> Self {
+    pub fn new(model: &ModelRef, position: Point2D, rotation_deg: f64) -> Self {
         Self {
             id: ElementId::new(),
-            name: spec.name.to_string(),
-            model_id: spec.id.to_string(),
+            name: model.name().to_string(),
+            model_id: model.id().to_string(),
             position,
-            base_z: spec.elevation,
+            base_z: model.elevation(),
             rotation_deg,
             scale: 1.0,
-            unit_price: spec.price,
+            unit_price: model.price(),
         }
     }
 
-    pub fn spec(&self) -> Option<&'static ModelSpec> {
-        ModelSpec::find(&self.model_id)
+    /// The library model this instance shows (`None` if it is no longer available).
+    pub fn model(&self) -> Option<ModelRef> {
+        find_model(&self.model_id)
     }
 
     pub fn category(&self) -> Option<ModelCategory> {
-        self.spec().map(|s| s.category)
+        self.model().map(|m| m.category())
     }
 
     /// Overall (width, depth, height) after scaling, in mm.
     pub fn size(&self) -> (f64, f64, f64) {
-        let (w, d, h) = self.spec().map(|s| s.geometry().size).unwrap_or((500.0, 500.0, 500.0));
+        let (w, d, h) = self.model().map(|m| m.geometry().size).unwrap_or((500.0, 500.0, 500.0));
         (w * self.scale, d * self.scale, h * self.scale)
     }
 
@@ -57,8 +58,8 @@ impl ModelComponent {
 
     /// World-space plan outline (closed, convex).
     pub fn outline(&self) -> Vec<Point2D> {
-        match self.spec() {
-            Some(spec) => spec.geometry().outline.iter().map(|&(x, y)| self.local_to_world(x, y)).collect(),
+        match self.model() {
+            Some(model) => model.geometry().outline.iter().map(|&(x, y)| self.local_to_world(x, y)).collect(),
             None => [(-250.0, -250.0), (250.0, -250.0), (250.0, 250.0), (-250.0, 250.0)]
                 .iter()
                 .map(|&(x, y)| self.local_to_world(x, y))
@@ -81,7 +82,7 @@ impl BimElement for ModelComponent {
     }
 
     fn display_color(&self) -> Option<[u8; 4]> {
-        self.spec().map(|s| s.body_color)
+        self.model().map(|m| m.body_color())
     }
 
     fn to_2d_primitives(&self) -> Vec<Polyline2D> {
@@ -105,7 +106,7 @@ impl BimElement for ModelComponent {
     }
 
     fn to_3d_mesh(&self) -> TriangleMesh {
-        let Some(spec) = self.spec() else {
+        let Some(model) = self.model() else {
             let (s, c) = self.rotation_deg.to_radians().sin_cos();
             let half = 250.0 * self.scale;
             return TriangleMesh::create_oriented_box(
@@ -115,7 +116,7 @@ impl BimElement for ModelComponent {
                 Vector3D::new(0.0, 0.0, half * 2.0),
             );
         };
-        let geometry = spec.geometry();
+        let geometry = model.geometry();
         let mut mesh = geometry.mesh.clone();
         let (s, c) = self.rotation_deg.to_radians().sin_cos();
         for p in &mut mesh.positions {
@@ -168,8 +169,8 @@ mod tests {
 
     #[test]
     fn instance_is_placed_rotated_and_scaled_in_world_space() {
-        let spec = ModelSpec::find("fridge").expect("catalogue has a fridge");
-        let mut m = ModelComponent::new(spec, Point2D::new(5000.0, 2000.0), 90.0);
+        let spec = find_model("fridge").expect("catalogue has a fridge");
+        let mut m = ModelComponent::new(&spec, Point2D::new(5000.0, 2000.0), 90.0);
         m.scale = 2.0;
         let (w, d, h) = spec.geometry().size;
         assert_eq!(m.size(), (w * 2.0, d * 2.0, h * 2.0));
@@ -180,19 +181,19 @@ mod tests {
         assert!((bbox.size().y - w * 2.0).abs() < 1.0 && (bbox.size().x - d * 2.0).abs() < 1.0);
         assert!((bbox.center().x - 5000.0).abs() < 1.0 && (bbox.center().y - 2000.0).abs() < 1.0);
 
-        let ac = ModelComponent::new(ModelSpec::find("ac_indoor").unwrap(), Point2D::ZERO, 0.0);
+        let ac = ModelComponent::new(&find_model("ac_indoor").unwrap(), Point2D::ZERO, 0.0);
         assert_eq!(ac.base_z, 2200.0, "wall units mount at their default height");
         assert!(ac.to_3d_mesh().bbox().unwrap().min.z >= 2199.9);
 
         assert_eq!(m.calculate_qto().items.len(), 1);
-        let car = ModelComponent::new(ModelSpec::find("sedan").unwrap(), Point2D::ZERO, 0.0);
+        let car = ModelComponent::new(&find_model("sedan").unwrap(), Point2D::ZERO, 0.0);
         assert!(car.calculate_qto().items.is_empty(), "entourage is not costed");
         assert!(car.to_2d_primitives()[0].closed);
     }
 
     #[test]
     fn unknown_model_falls_back_to_a_placeholder_box() {
-        let mut m = ModelComponent::new(ModelSpec::find("sedan").unwrap(), Point2D::ZERO, 0.0);
+        let mut m = ModelComponent::new(&find_model("sedan").unwrap(), Point2D::ZERO, 0.0);
         m.model_id = "missing".into();
         assert_eq!(m.to_3d_mesh().triangle_count(), 12);
         assert_eq!(m.outline().len(), 4);

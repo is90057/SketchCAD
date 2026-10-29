@@ -38,7 +38,10 @@ pub use elements::furniture::{Furniture, FurnitureKind};
 pub use elements::ifc_component::IfcComponent;
 pub use elements::light_fixture::{LightFixture, LightType};
 pub use elements::model_component::ModelComponent;
-pub use model_library::{ModelCategory, ModelGeometry, ModelSpec, CATALOG};
+pub use model_library::{
+    all_models, convert_imported_mesh, find_model, register_custom_model, unregister_custom_model, CustomModel, ModelCategory,
+    ModelGeometry, ModelLibraryFile, ModelRef, ModelSpec, CATALOG,
+};
 pub use elements::outlet::{OutletVoltage, Outlet, PlugStandard};
 pub use elements::railing::Railing;
 pub use elements::ramp::Ramp;

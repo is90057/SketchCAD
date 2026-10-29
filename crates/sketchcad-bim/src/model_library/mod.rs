@@ -6,6 +6,7 @@
 //! frame: millimetres, Z up, the footprint centred on the origin, the front facing −Y.
 
 mod catalog;
+mod custom;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,6 +16,10 @@ use sketchcad_core::{Point3D, Vector3D};
 use sketchcad_geom::TriangleMesh;
 
 pub use catalog::CATALOG;
+pub use custom::{
+    all_models, convert_imported_mesh, find_model, register_custom_model, unregister_custom_model, CustomModel, ModelLibraryFile,
+    ModelRef,
+};
 
 /// Shelf of the model library (模型分類).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -72,6 +77,7 @@ impl ModelCategory {
 }
 
 /// One entry of the catalogue.
+#[derive(Debug)]
 pub struct ModelSpec {
     /// Stable identifier stored in project files.
     pub id: &'static str,
@@ -121,15 +127,15 @@ impl ModelSpec {
     fn build_geometry(&self) -> ModelGeometry {
         let mut kit = Kit::default();
         (self.build)(&mut kit);
-        let mut mesh = kit.mesh;
+        ModelGeometry::from_mesh(kit.mesh)
+    }
+}
 
-        // Normalise: footprint centred on the origin, resting on z = 0
-        if let Some(bbox) = mesh.bbox() {
-            let shift = Vector3D::new(-(bbox.min.x + bbox.max.x) * 0.5, -(bbox.min.y + bbox.max.y) * 0.5, -bbox.min.z);
-            for p in &mut mesh.positions {
-                *p = *p + shift;
-            }
-        }
+impl ModelGeometry {
+    /// Normalises a model mesh — footprint centred on the origin, resting on z = 0 — and
+    /// derives its feature edges, plan outline and size.
+    pub fn from_mesh(mut mesh: TriangleMesh) -> Self {
+        normalize_mesh(&mut mesh);
         if mesh.face_colors.iter().all(Option::is_none) {
             mesh.face_colors.clear();
         }
@@ -144,6 +150,16 @@ impl ModelSpec {
             outline: convex_hull(points),
             size: size.unwrap_or((0.0, 0.0, 0.0)),
             mesh,
+        }
+    }
+}
+
+/// Moves a mesh so its footprint is centred on the origin and it rests on z = 0.
+pub(crate) fn normalize_mesh(mesh: &mut TriangleMesh) {
+    if let Some(bbox) = mesh.bbox() {
+        let shift = Vector3D::new(-(bbox.min.x + bbox.max.x) * 0.5, -(bbox.min.y + bbox.max.y) * 0.5, -bbox.min.z);
+        for p in &mut mesh.positions {
+            *p += shift;
         }
     }
 }

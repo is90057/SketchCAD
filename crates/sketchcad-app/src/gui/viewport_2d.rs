@@ -56,7 +56,7 @@ pub struct Viewport2D {
     pub outlet_voltage: OutletVoltage,
     pub outlet_gangs: u8,
     /// Catalogue id of the model placed with the Model tool
-    pub model_id: Option<&'static str>,
+    pub model_id: Option<String>,
     pub move_base_pt: Option<Point2D>,
     pub snap_grid_size: f64, // mm, e.g. 100.0
     pub snap_enabled: bool,
@@ -1304,10 +1304,10 @@ impl Viewport2D {
                     }
                 }
                 ToolMode::Model => {
-                    match self.model_id.and_then(sketchcad_bim::ModelSpec::find) {
-                        Some(spec) => {
+                    match self.model_id.as_deref().and_then(sketchcad_bim::find_model) {
+                        Some(model) => {
                             let rot_deg = self.furniture_rotation.to_degrees();
-                            let preview = sketchcad_bim::ModelComponent::new(spec, world_pt, rot_deg);
+                            let preview = sketchcad_bim::ModelComponent::new(&model, world_pt, rot_deg);
                             let stroke = Stroke::new(1.8, Color32::from_rgb(120, 220, 160));
                             for prim in sketchcad_bim::BimElement::to_2d_primitives(&preview) {
                                 let pts: Vec<Pos2> = prim.vertices.iter().map(|&p| to_screen(p)).collect();
@@ -1322,15 +1322,15 @@ impl Viewport2D {
                             painter.text(
                                 to_screen(world_pt + Vector2D::new(0.0, -d * 0.5 - 300.0)),
                                 egui::Align2::CENTER_CENTER,
-                                format!("點擊放置 {} ({:.0}×{:.0}×{:.0}mm) [R 旋轉 90°]", spec.name, w, d, h),
+                                format!("點擊放置 {} ({:.0}×{:.0}×{:.0}mm) [R 旋轉 90°]", model.name(), w, d, h),
                                 egui::FontId::monospace(12.0),
                                 Color32::from_rgb(150, 235, 180),
                             );
                             if response.clicked() {
                                 push_undo(undo_stack, doc);
-                                if let Some(id) = doc.insert_model(spec.id, world_pt, rot_deg) {
+                                if let Some(id) = doc.insert_model(model.id(), world_pt, rot_deg) {
                                     *selected_id = Some(id);
-                                    *status_msg = format!("✔ 已放置模型: {}", spec.name);
+                                    *status_msg = format!("✔ 已放置模型: {}", model.name());
                                 }
                             }
                         }

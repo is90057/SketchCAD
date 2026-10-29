@@ -135,6 +135,9 @@ pub struct SketchCadProject {
     pub custom_materials: Vec<Material>,
     #[serde(default)]
     pub painted: Vec<PaintedElement>,
+    /// User library models placed in the project, so the file opens anywhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_models: Vec<crate::CustomModel>,
 }
 
 impl SketchCadProject {
@@ -151,6 +154,7 @@ impl SketchCadProject {
             storeys: Vec::new(),
             custom_materials: Vec::new(),
             painted: Vec::new(),
+            custom_models: Vec::new(),
         }
     }
 
