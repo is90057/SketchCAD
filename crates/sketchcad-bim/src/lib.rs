@@ -2,11 +2,13 @@ pub mod cost;
 pub mod document;
 pub mod element;
 pub mod elements {
+    pub mod annotation;
     pub mod beam;
     pub mod ceiling;
     pub mod column;
     pub mod curtain_wall;
     pub mod door;
+    pub mod draft;
     pub mod furniture;
     pub mod ifc_component;
     pub mod light_fixture;
@@ -22,6 +24,8 @@ pub mod elements {
     pub mod window;
 }
 pub mod material;
+pub mod modify;
+pub mod layers;
 pub mod model_library;
 pub mod project;
 
@@ -29,11 +33,15 @@ pub use cost::{CostLineItem, QuantityTakeoff};
 pub use document::{BimDocument, ElementPlacement, Storey};
 pub use element::{BimElement, ElementKind};
 pub use project::{element_to_serializable, PaintedElement, SerializableElement, SketchCadProject};
+pub use elements::annotation::{text_width, Annotation, AnnotationGeometry, AnnotationText, DimAxis};
 pub use elements::beam::Beam;
 pub use elements::ceiling::Ceiling;
 pub use elements::column::Column;
 pub use elements::curtain_wall::{CurtainGrid, CurtainWall, Mullion};
 pub use elements::door::{Door, DoorSwing};
+pub use elements::draft::{catmull_rom, hatch_lines, point_in_polygon, DraftGeometry, DraftShape, HatchPattern, LineType};
+pub use layers::{default_layer_for, Layer, LayerTable, LAYER_ZERO};
+pub use modify::{corner_lines, corner_polyline, Corner, Transform2D};
 pub use elements::furniture::{Furniture, FurnitureKind};
 pub use elements::ifc_component::IfcComponent;
 pub use elements::light_fixture::{LightFixture, LightType};

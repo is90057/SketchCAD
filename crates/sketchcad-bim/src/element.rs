@@ -25,6 +25,12 @@ pub enum ElementKind {
     Outlet,
     /// Instance of a 3D model-library model (模型百寶箱)
     Model,
+    /// 2D drafting line work: line, polyline, circle, arc, spline (繪製)
+    Draft,
+    /// 2D hatch fill (填充線)
+    Hatch,
+    /// Dimensions, text and leaders (註解)
+    Annotation,
 }
 
 impl ElementKind {
@@ -51,6 +57,9 @@ impl ElementKind {
             ElementKind::LightFixture => [48, 52, 58, 255], // Luminaire hardware (chassis / trim)
             ElementKind::Outlet => [246, 246, 242, 255], // Wiring-device cover plate
             ElementKind::Model => [190, 185, 175, 255],
+            ElementKind::Draft => [235, 235, 240, 255],
+            ElementKind::Hatch => [200, 200, 210, 255],
+            ElementKind::Annotation => [140, 220, 255, 255],
         }
     }
 }

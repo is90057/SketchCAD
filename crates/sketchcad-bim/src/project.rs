@@ -3,7 +3,7 @@ use crate::element::BimElement;
 use crate::material::Material;
 use crate::{
     Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, IfcComponent, LightFixture,
-    ModelComponent, Mullion, Outlet, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
+    Annotation, DraftShape, ModelComponent, Mullion, Outlet, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,8 @@ pub enum SerializableElement {
     IfcComponent(IfcComponent),
     Outlet(Outlet),
     Model(ModelComponent),
+    Draft(DraftShape),
+    Annotation(Annotation),
 }
 
 impl SerializableElement {
@@ -60,6 +62,8 @@ impl SerializableElement {
             SerializableElement::IfcComponent(c) => Box::new(c),
             SerializableElement::Outlet(o) => Box::new(o),
             SerializableElement::Model(m) => Box::new(m),
+            SerializableElement::Draft(d) => Box::new(d),
+            SerializableElement::Annotation(a) => Box::new(a),
         }
     }
 }
@@ -107,6 +111,10 @@ pub fn element_to_serializable(elem: &dyn BimElement) -> Option<SerializableElem
         Some(SerializableElement::Outlet(o.clone()))
     } else if let Some(m) = any.downcast_ref::<ModelComponent>() {
         Some(SerializableElement::Model(m.clone()))
+    } else if let Some(d) = any.downcast_ref::<DraftShape>() {
+        Some(SerializableElement::Draft(d.clone()))
+    } else if let Some(a) = any.downcast_ref::<Annotation>() {
+        Some(SerializableElement::Annotation(a.clone()))
     } else {
         None
     }
@@ -138,6 +146,20 @@ pub struct SketchCadProject {
     /// User library models placed in the project, so the file opens anywhere.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_models: Vec<crate::CustomModel>,
+    /// Layer table (圖層)
+    #[serde(default)]
+    pub layers: Vec<crate::Layer>,
+    #[serde(default)]
+    pub layer_assignments: Vec<LayerAssignment>,
+    #[serde(default)]
+    pub current_layer: String,
+}
+
+/// Layer of one element in a saved project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerAssignment {
+    pub element: ElementId,
+    pub layer: String,
 }
 
 impl SketchCadProject {
@@ -155,6 +177,9 @@ impl SketchCadProject {
             custom_materials: Vec::new(),
             painted: Vec::new(),
             custom_models: Vec::new(),
+            layers: Vec::new(),
+            layer_assignments: Vec::new(),
+            current_layer: String::new(),
         }
     }
 

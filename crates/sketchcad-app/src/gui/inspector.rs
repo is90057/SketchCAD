@@ -69,6 +69,9 @@ pub fn kind_display_name(kind: ElementKind) -> &'static str {
         ElementKind::LightFixture => "照明燈具",
         ElementKind::Outlet => "電源插座",
         ElementKind::Model => "模型元件",
+        ElementKind::Draft => "繪圖線條",
+        ElementKind::Hatch => "填充線",
+        ElementKind::Annotation => "註解 (標註 / 文字)",
     }
 }
 
@@ -226,6 +229,19 @@ fn render_hierarchy_tree(
             "furnishing",
             "🖼 室內空間與軟裝照明 (Space, FF&E & Lighting)",
             &[ElementKind::Space, ElementKind::Furniture, ElementKind::LightFixture, ElementKind::Outlet],
+        );
+
+        // Group 6: ✏ 2D 繪製 (drafting line work and hatches)
+        render_category_group(
+            ui,
+            doc,
+            undo_stack,
+            clipboard,
+            selected_id,
+            state,
+            "drafting",
+            "✏ 2D 繪製 (Drafting)",
+            &[ElementKind::Draft, ElementKind::Hatch, ElementKind::Annotation],
         );
 
         // Group 5: 📦 模型百寶箱元件 (3D model library instances)
@@ -562,6 +578,14 @@ fn render_element_tree_node(
                     if model_placement_ui(ui, m) {
                         needs_sync = true;
                     }
+                } else if let Some(d) = doc.get_draft_mut(id) {
+                    if draft_properties_ui(ui, d) {
+                        needs_sync = true;
+                    }
+                } else if let Some(a) = doc.get_annotation_mut(id) {
+                    if annotation_properties_ui(ui, a) {
+                        needs_sync = true;
+                    }
                 } else if let Some(l) = doc.get_light_fixture_mut(id) {
                     ui.horizontal(|ui| {
                         ui.label("光通量:");
@@ -801,6 +825,25 @@ fn render_selected_element_properties(
         .show(ui, |ui| {
 
             // Section 1: 幾何尺寸 (Geometry)
+            // Section 0: 一般 (General) — layer
+            render_category_header(ui, "一般 (General)");
+            let current_layer = doc.layer_of(id);
+            let mut chosen_layer: Option<String> = None;
+            vs_property_row(ui, "圖層 (Layer)", "物件所在的圖層；顏色、線型、線粗與透明度未自訂時依圖層設定 (ByLayer)。", state, |ui| {
+                egui::ComboBox::from_id_salt(format!("layer_of_{:?}", id)).selected_text(&current_layer).show_ui(ui, |ui| {
+                    for layer in doc.layers() {
+                        let mark = if layer.visible { "" } else { " (關閉)" };
+                        if ui.selectable_label(layer.name == current_layer, format!("{}{mark}", layer.name)).clicked() {
+                            chosen_layer = Some(layer.name.clone());
+                        }
+                    }
+                });
+            });
+            if let Some(name) = chosen_layer.filter(|n| *n != current_layer) {
+                push_undo(undo_stack, doc);
+                doc.set_layer_of(id, &name);
+            }
+
             render_category_header(ui, "幾何尺寸 (Geometry)");
 
             if let Some(wall) = doc.get_wall_mut(id) {
@@ -1156,6 +1199,22 @@ fn render_selected_element_properties(
                 vs_property_row(ui, "參考單價 (Cost)", "FF&E 軟裝採購與組裝標準造價 (TWD)。", state, |ui| {
                     ui.label(format!("NT$ {:.0}", f.kind.default_cost()));
                 });
+            } else if let Some(a) = doc.get_annotation_mut(id) {
+                vs_property_row(ui, "註解 (Annotation)", "尺寸標註、多行文字與多重引線：可修改文字、字高與顏色。", state, |ui| {
+                    ui.vertical(|ui| {
+                        if annotation_properties_ui(ui, a) {
+                            needs_sync = true;
+                        }
+                    });
+                });
+            } else if let Some(d) = doc.get_draft_mut(id) {
+                vs_property_row(ui, "繪圖 (Drafting)", "2D 平面繪圖元素：可調整尺寸、填充圖樣、間距與角度。", state, |ui| {
+                    ui.vertical(|ui| {
+                        if draft_properties_ui(ui, d) {
+                            needs_sync = true;
+                        }
+                    });
+                });
             } else if let Some(m) = doc.get_model_mut(id) {
                 let (w, d, h) = m.size();
                 let category = m.category().map_or("未知模型", |c| c.label());
@@ -1387,6 +1446,157 @@ fn render_selected_element_properties(
     if needs_sync {
         doc.sync();
     }
+}
+
+/// Text, text height and colour of a dimension / text / leader. Returns true on change.
+fn annotation_properties_ui(ui: &mut Ui, a: &mut sketchcad_bim::Annotation) -> bool {
+    use sketchcad_bim::AnnotationGeometry;
+    let mut changed = false;
+    ui.label(egui::RichText::new(a.geometry.label()).strong());
+    match &mut a.geometry {
+        AnnotationGeometry::Text { text, rotation_deg, .. } => {
+            ui.label("文字內容:");
+            changed |= ui.add(egui::TextEdit::multiline(text).desired_rows(3).desired_width(220.0)).changed();
+            ui.horizontal(|ui| {
+                ui.label("旋轉:");
+                changed |= ui.add(egui::DragValue::new(rotation_deg).speed(1.0).range(-180.0..=180.0).suffix("°")).changed();
+            });
+        }
+        AnnotationGeometry::Leader { text, .. } => {
+            ui.label("引線文字:");
+            changed |= ui.add(egui::TextEdit::multiline(text).desired_rows(2).desired_width(220.0)).changed();
+        }
+        _ => {
+            ui.label(format!("量測值: {}", a.geometry.measurement_text()));
+            let mut text = a.text_override.clone().unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.label("覆寫文字:");
+                if ui.add(egui::TextEdit::singleline(&mut text).hint_text("<> = 量測值").desired_width(140.0)).changed() {
+                    a.text_override = (!text.trim().is_empty()).then_some(text);
+                    changed = true;
+                }
+            });
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label("字高:");
+        changed |= ui.add(egui::DragValue::new(&mut a.text_height).speed(5.0).range(10.0..=5000.0).suffix(" mm")).changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("顏色:");
+        let mut default = a.color.is_none();
+        if ui.checkbox(&mut default, "預設").changed() {
+            a.color = if default { None } else { Some([255, 200, 80, 255]) };
+            changed = true;
+        }
+        if let Some(rgba) = &mut a.color {
+            let mut c = egui::Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+            if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).changed() {
+                *rgba = c.to_srgba_unmultiplied();
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+/// Editable parameters of a 2D drafting entity. Returns true on change.
+fn draft_properties_ui(ui: &mut Ui, d: &mut sketchcad_bim::DraftShape) -> bool {
+    use sketchcad_bim::DraftGeometry;
+    let mut changed = false;
+    ui.label(egui::RichText::new(d.geometry.label()).strong());
+    // 性質: colour and line type (the layer is chosen under 一般 / 圖層)
+    ui.horizontal(|ui| {
+        ui.label("顏色:");
+        let mut by_layer = d.color.is_none();
+        if ui.checkbox(&mut by_layer, "依圖層").changed() {
+            d.color = if by_layer { None } else { Some([255, 90, 90, 255]) };
+            changed = true;
+        }
+        if let Some(rgba) = &mut d.color {
+            let mut c = egui::Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+            if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).changed() {
+                *rgba = c.to_srgba_unmultiplied();
+                changed = true;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("線型:");
+        egui::ComboBox::from_id_salt("draft_linetype").selected_text(d.linetype.label()).show_ui(ui, |ui| {
+            for lt in sketchcad_bim::LineType::ALL {
+                changed |= ui.selectable_value(&mut d.linetype, lt, lt.label()).changed();
+            }
+        });
+    });
+    let point_ui = |ui: &mut Ui, label: &str, p: &mut sketchcad_core::Point2D| -> bool {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let x = ui.add(egui::DragValue::new(&mut p.x).speed(10.0).prefix("X ").suffix(" mm")).changed();
+            let y = ui.add(egui::DragValue::new(&mut p.y).speed(10.0).prefix("Y ").suffix(" mm")).changed();
+            x || y
+        })
+        .inner
+    };
+    match &mut d.geometry {
+        DraftGeometry::Line { start, end } => {
+            changed |= point_ui(ui, "起點", start);
+            changed |= point_ui(ui, "終點", end);
+            ui.label(format!("長度: {:.0} mm", start.distance(*end)));
+        }
+        DraftGeometry::Polyline { points, closed } => {
+            ui.horizontal(|ui| {
+                ui.label(format!("{} 個頂點", points.len()));
+                changed |= ui.checkbox(closed, "封閉").changed();
+            });
+            egui::CollapsingHeader::new("頂點座標").id_salt("draft_vertices").show(ui, |ui| {
+                for (i, p) in points.iter_mut().enumerate() {
+                    changed |= point_ui(ui, &format!("{}", i + 1), p);
+                }
+            });
+        }
+        DraftGeometry::Circle { radius, center } => {
+            changed |= point_ui(ui, "圓心", center);
+            ui.horizontal(|ui| {
+                ui.label("半徑:");
+                changed |= ui.add(egui::DragValue::new(radius).speed(10.0).range(1.0..=1_000_000.0).suffix(" mm")).changed();
+            });
+        }
+        DraftGeometry::Arc { radius, sweep_deg, center, .. } => {
+            changed |= point_ui(ui, "圓心", center);
+            ui.horizontal(|ui| {
+                ui.label("半徑:");
+                changed |= ui.add(egui::DragValue::new(radius).speed(10.0).range(1.0..=1_000_000.0).suffix(" mm")).changed();
+                ui.label("夾角:");
+                changed |= ui.add(egui::DragValue::new(sweep_deg).speed(1.0).range(-359.9..=359.9).suffix("°")).changed();
+            });
+        }
+        DraftGeometry::Spline { points } => {
+            ui.label(format!("{} 個通過點", points.len()));
+            egui::CollapsingHeader::new("通過點座標").id_salt("draft_spline_points").show(ui, |ui| {
+                for (i, p) in points.iter_mut().enumerate() {
+                    changed |= point_ui(ui, &format!("{}", i + 1), p);
+                }
+            });
+        }
+        DraftGeometry::Hatch { pattern, spacing, angle_deg, .. } => {
+            egui::ComboBox::from_id_salt("draft_hatch_pattern").selected_text(pattern.label()).show_ui(ui, |ui| {
+                for p in sketchcad_bim::HatchPattern::ALL {
+                    changed |= ui.selectable_value(pattern, p, p.label()).changed();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("間距:");
+                changed |= ui.add(egui::DragValue::new(spacing).speed(5.0).range(10.0..=5000.0).suffix(" mm")).changed();
+                ui.label("角度:");
+                changed |= ui.add(egui::DragValue::new(angle_deg).speed(1.0).range(-180.0..=180.0).suffix("°")).changed();
+            });
+        }
+    }
+    if changed {
+        d.name = d.geometry.label().to_string();
+    }
+    changed
 }
 
 /// Rotation, uniform scale and elevation of a model-library instance. Returns true on change.

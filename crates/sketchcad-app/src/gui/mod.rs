@@ -2,6 +2,7 @@ pub mod app;
 pub mod doc_watch;
 pub mod gpu_scene;
 pub mod inspector;
+pub mod layer_manager;
 pub mod material_library;
 pub mod model_browser;
 pub mod plan_sheets;

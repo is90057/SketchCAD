@@ -33,6 +33,216 @@ pub enum ToolMode {
     Outlet,
     /// Place a model from the 3D model library (模型百寶箱)
     Model,
+    /// 繪製: straight line segments (chained)
+    DraftLine,
+    /// 繪製: polyline of straight segments (聚合線)
+    DraftPolyline,
+    /// 繪製: circle by centre and radius point
+    DraftCircle,
+    /// 繪製: three-point arc
+    DraftArc,
+    /// 繪製: smooth curve through clicked points (多段線 / 雲形線)
+    DraftSpline,
+    /// 繪製: hatch fill of a closed region (填充線)
+    DraftHatch,
+    /// 修改: delete picked objects (E)
+    Erase,
+    /// 修改: copy with a base point, placing copies repeatedly (CO / CP)
+    Copy,
+    /// 修改: trim drafting to cutting edges (TR)
+    Trim,
+    /// 修改: extend drafting to boundary edges (EX)
+    Extend,
+    /// 修改: mirror across a two-point axis (MI)
+    Mirror,
+    /// 修改: parallel copy at a distance (O)
+    Offset,
+    /// 修改: rectangular / polar / path array (AR)
+    Array,
+    /// 修改: rotate about a base point (RO)
+    Rotate,
+    /// 修改: scale about a base point (SC)
+    Scale,
+    /// 修改: round corner between two lines / at a polyline vertex (F)
+    Fillet,
+    /// 修改: bevel corner (CHA)
+    Chamfer,
+    /// 註解: smart dimension — line → linear / aligned, circle → diameter, arc → radius (DIM)
+    Dim,
+    /// 註解: horizontal / vertical dimension (DIMLINEAR)
+    DimLinear,
+    /// 註解: dimension parallel to a slanted edge (DIMALIGNED)
+    DimAligned,
+    /// 註解: angle between two lines or of an arc (DIMANGULAR)
+    DimAngular,
+    /// 註解: radius of a circle / arc (DIMRADIUS)
+    DimRadius,
+    /// 註解: diameter of a circle / arc (DIMDIAMETER)
+    DimDiameter,
+    /// 註解: dimension a window of objects at once (QDIM)
+    QDim,
+    /// 註解: chain from the previous dimension (DIMCONTINUE)
+    DimContinue,
+    /// 註解: stack from the previous dimension's first point (DIMBASELINE)
+    DimBaseline,
+    /// 註解: multi-line text (MTEXT / MT)
+    MText,
+    /// 註解: leader with arrow and text (MLEADER)
+    MLeader,
+}
+
+/// Layout of the dimensions QDIM creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QDimMode {
+    Continuous,
+    Baseline,
+    Staggered,
+}
+
+impl QDimMode {
+    pub const ALL: [Self; 3] = [Self::Continuous, Self::Baseline, Self::Staggered];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Continuous => "連續式",
+            Self::Baseline => "基線式",
+            Self::Staggered => "交錯式",
+        }
+    }
+}
+
+/// Settings of the 註解 tools.
+#[derive(Debug, Clone)]
+pub struct AnnotateSettings {
+    pub text_height: f64,
+    pub qdim_mode: QDimMode,
+    /// Spacing between stacked baseline / staggered dimension lines (mm)
+    pub stack_spacing: f64,
+}
+
+impl Default for AnnotateSettings {
+    fn default() -> Self {
+        Self { text_height: sketchcad_bim::Annotation::DEFAULT_TEXT_HEIGHT, qdim_mode: QDimMode::Continuous, stack_spacing: 600.0 }
+    }
+}
+
+/// What a dimension tool has picked so far.
+#[derive(Debug, Clone, Copy)]
+enum DimSource {
+    Segment(Point2D, Point2D),
+    Circle { center: Point2D, radius: f64 },
+    Arc { center: Point2D, radius: f64, start_deg: f64, sweep_deg: f64 },
+    Line(Point2D, Point2D),
+    Lines((Point2D, Point2D), (Point2D, Point2D)),
+}
+
+/// Text being typed for a new MTEXT / MLEADER.
+struct TextEditor {
+    geometry: sketchcad_bim::AnnotationGeometry,
+    text: String,
+    screen_pos: Pos2,
+    focus: bool,
+}
+
+/// Array layout for the Array tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayMode {
+    Rectangular,
+    Polar,
+    Path,
+}
+
+impl ArrayMode {
+    pub const ALL: [Self; 3] = [Self::Rectangular, Self::Polar, Self::Path];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Rectangular => "矩形陣列",
+            Self::Polar => "環形陣列",
+            Self::Path => "路徑陣列",
+        }
+    }
+}
+
+/// Parameters of the 修改 tools, set from the ribbon.
+#[derive(Debug, Clone)]
+pub struct ModifySettings {
+    pub offset_distance: f64,
+    pub fillet_radius: f64,
+    pub chamfer_d1: f64,
+    pub chamfer_d2: f64,
+    pub scale_factor: f64,
+    pub mirror_erase_source: bool,
+    pub array_mode: ArrayMode,
+    pub array_rows: u32,
+    pub array_cols: u32,
+    pub array_row_spacing: f64,
+    pub array_col_spacing: f64,
+    pub array_count: u32,
+    pub array_angle: f64,
+}
+
+impl Default for ModifySettings {
+    fn default() -> Self {
+        Self {
+            offset_distance: 100.0,
+            fillet_radius: 300.0,
+            chamfer_d1: 200.0,
+            chamfer_d2: 200.0,
+            scale_factor: 2.0,
+            mirror_erase_source: false,
+            array_mode: ArrayMode::Rectangular,
+            array_rows: 2,
+            array_cols: 3,
+            array_row_spacing: 1500.0,
+            array_col_spacing: 1500.0,
+            array_count: 6,
+            array_angle: 360.0,
+        }
+    }
+}
+
+impl ToolMode {
+    pub fn is_annotate(&self) -> bool {
+        matches!(
+            self,
+            ToolMode::Dim
+                | ToolMode::DimLinear
+                | ToolMode::DimAligned
+                | ToolMode::DimAngular
+                | ToolMode::DimRadius
+                | ToolMode::DimDiameter
+                | ToolMode::QDim
+                | ToolMode::DimContinue
+                | ToolMode::DimBaseline
+                | ToolMode::MText
+                | ToolMode::MLeader
+        )
+    }
+
+    pub fn is_modify(&self) -> bool {
+        matches!(
+            self,
+            ToolMode::Erase
+                | ToolMode::Copy
+                | ToolMode::Trim
+                | ToolMode::Extend
+                | ToolMode::Mirror
+                | ToolMode::Offset
+                | ToolMode::Array
+                | ToolMode::Rotate
+                | ToolMode::Scale
+                | ToolMode::Fillet
+                | ToolMode::Chamfer
+        )
+    }
+
+    pub fn is_drafting(&self) -> bool {
+        matches!(
+            self,
+            ToolMode::DraftLine | ToolMode::DraftPolyline | ToolMode::DraftCircle | ToolMode::DraftArc | ToolMode::DraftSpline | ToolMode::DraftHatch
+        )
+    }
 }
 
 pub struct Viewport2D {
@@ -57,6 +267,26 @@ pub struct Viewport2D {
     pub outlet_gangs: u8,
     /// Catalogue id of the model placed with the Model tool
     pub model_id: Option<String>,
+    /// Points clicked so far by the active drafting tool
+    pub draft_points: Vec<Point2D>,
+    /// Tool the draft points belong to (switching tools drops them)
+    draft_tool: ToolMode,
+    /// Hatch settings for the Hatch tool
+    pub hatch_pattern: sketchcad_bim::HatchPattern,
+    pub hatch_spacing: f64,
+    pub hatch_angle: f64,
+    /// Parameters of the 修改 tools
+    pub modify: ModifySettings,
+    /// Object a two-step modify tool works on (offset source, first fillet line)
+    modify_target: Option<(ElementId, Point2D)>,
+    /// Settings of the 註解 tools
+    pub annotate: AnnotateSettings,
+    /// Object picked by a dimension tool
+    dim_source: Option<DimSource>,
+    /// Last linear dimension created (base of DIMCONTINUE / DIMBASELINE)
+    last_dim: Option<ElementId>,
+    /// Text window of MTEXT / MLEADER
+    text_editor: Option<TextEditor>,
     pub move_base_pt: Option<Point2D>,
     pub snap_grid_size: f64, // mm, e.g. 100.0
     pub snap_enabled: bool,
@@ -84,6 +314,1203 @@ pub enum SheetView {
     All,
     /// One sheet, drawn in model coordinates (editing enabled)
     Single(usize),
+}
+
+/// Click / finish events for the drafting tools in one frame.
+#[derive(Clone, Copy)]
+struct DraftInput {
+    /// A single click (adds a point)
+    clicked: bool,
+    /// Double-click, right-click or Enter (ends an open polyline / spline / line chain)
+    finish: bool,
+}
+
+/// Smallest closed region under `p` that a hatch can fill: closed polylines and circles,
+/// room spaces and slabs.
+pub fn hatch_region_at(doc: &BimDocument, p: Point2D) -> Option<Vec<Point2D>> {
+    use sketchcad_bim::point_in_polygon;
+    let mut regions: Vec<Vec<Point2D>> = Vec::new();
+    for elem in doc.get_elements_by_kind(ElementKind::Draft) {
+        if let Some(region) = doc.get_draft(elem.id()).and_then(|d| d.geometry.closed_region()) {
+            regions.push(region);
+        }
+    }
+    for elem in doc.get_elements_by_kind(ElementKind::Space) {
+        if let Some(sp) = doc.get_space(elem.id()) {
+            regions.push(sp.boundary.clone());
+        }
+    }
+    for elem in doc.get_elements_by_kind(ElementKind::Slab) {
+        if let Some(sl) = doc.get_slab(elem.id()) {
+            let (o, w, d) = (sl.origin, sl.width, sl.depth);
+            regions.push(vec![o, o + Vector2D::new(w, 0.0), o + Vector2D::new(w, d), o + Vector2D::new(0.0, d)]);
+        }
+    }
+    let area = |poly: &Vec<Point2D>| sketchcad_geom::Polyline2D::new(poly.clone(), true).area();
+    regions
+        .into_iter()
+        .filter(|r| r.len() >= 3 && point_in_polygon(p, r))
+        .min_by(|a, b| area(a).total_cmp(&area(b)))
+}
+
+impl Viewport2D {
+    /// Elevation of the level being drawn on: the open sheet, else the lowest one.
+    fn draft_elevation(&self) -> f64 {
+        match self.sheet_view {
+            SheetView::Single(i) => self.plan.sheets.get(i).map_or(0.0, |s| s.elevation),
+            SheetView::All => self.plan.sheets.first().map_or(0.0, |s| s.elevation),
+        }
+    }
+
+    /// Preview and input handling of the 繪製 tools: line, polyline, circle, arc, spline
+    /// and hatch.
+    #[allow(clippy::too_many_arguments)]
+    fn draft_tool_ui(
+        &mut self,
+        tool: ToolMode,
+        input: DraftInput,
+        cursor: Point2D,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point2D) -> Pos2,
+        doc: &mut BimDocument,
+        undo_stack: &mut Vec<BimDocument>,
+        selected_id: &mut Option<ElementId>,
+        status_msg: &mut String,
+    ) {
+        use sketchcad_bim::DraftGeometry;
+        let preview = Stroke::new(1.6, Color32::from_rgb(120, 220, 255));
+        let guide = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 220, 255, 120));
+        let draw_path = |pts: &[Point2D], closed: bool, stroke: Stroke| {
+            let screen: Vec<Pos2> = pts.iter().map(|&p| to_screen(p)).collect();
+            for w in screen.windows(2) {
+                painter.line_segment([w[0], w[1]], stroke);
+            }
+            if closed && screen.len() > 2 {
+                painter.line_segment([screen[screen.len() - 1], screen[0]], stroke);
+            }
+        };
+        let label = |text: String| {
+            painter.text(to_screen(cursor) + egui::vec2(14.0, -16.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::monospace(12.0), Color32::from_rgb(140, 225, 255));
+        };
+        for p in &self.draft_points {
+            painter.circle_filled(to_screen(*p), 3.0, Color32::from_rgb(120, 220, 255));
+        }
+        let elevation = self.draft_elevation();
+        let mut create = |geometry: DraftGeometry, doc: &mut BimDocument, status: &mut String| {
+            push_undo(undo_stack, doc);
+            let name = geometry.label();
+            *selected_id = Some(doc.insert_draft(geometry, elevation));
+            *status = format!("✔ 已繪製{name}");
+        };
+        // Clicking the first point again closes a polygon (within ~12 px)
+        let near_first = |pts: &[Point2D]| pts.len() >= 3 && (to_screen(pts[0]) - to_screen(cursor)).length() < 12.0;
+
+        match tool {
+            ToolMode::DraftLine => {
+                if let Some(&start) = self.draft_points.last() {
+                    draw_path(&[start, cursor], false, preview);
+                    let v = cursor - start;
+                    label(format!("長度 {:.0} mm · 角度 {:.1}°", v.length(), v.y.atan2(v.x).to_degrees()));
+                    if input.clicked && v.length() > 1.0 {
+                        create(DraftGeometry::Line { start, end: cursor }, doc, status_msg);
+                        self.draft_points = vec![cursor];
+                    }
+                } else if input.clicked {
+                    self.draft_points.push(cursor);
+                }
+                if input.finish {
+                    self.draft_points.clear();
+                }
+            }
+            ToolMode::DraftPolyline | ToolMode::DraftSpline | ToolMode::DraftHatch => {
+                let spline = tool == ToolMode::DraftSpline;
+                let hatch = tool == ToolMode::DraftHatch;
+                let mut pts = self.draft_points.clone();
+                let closing = !spline && near_first(&pts);
+                if !pts.is_empty() && !closing {
+                    pts.push(cursor);
+                }
+                if spline {
+                    draw_path(&sketchcad_bim::catmull_rom(&pts, 12), false, preview);
+                    draw_path(&pts, false, guide);
+                } else {
+                    draw_path(&pts, closing || (hatch && pts.len() > 2), preview);
+                }
+                if closing {
+                    painter.circle_stroke(to_screen(self.draft_points[0]), 8.0, Stroke::new(1.5, Color32::from_rgb(255, 215, 0)));
+                }
+                let hatch_settings = (self.hatch_pattern, self.hatch_spacing, self.hatch_angle);
+                let make = |points: Vec<Point2D>, closed: bool| -> DraftGeometry {
+                    if hatch {
+                        DraftGeometry::Hatch { boundary: points, pattern: hatch_settings.0, spacing: hatch_settings.1, angle_deg: hatch_settings.2 }
+                    } else if spline {
+                        DraftGeometry::Spline { points }
+                    } else {
+                        DraftGeometry::Polyline { points, closed }
+                    }
+                };
+                let min_points = if hatch { 3 } else { 2 };
+
+                if hatch && self.draft_points.is_empty() {
+                    // Pick mode: fill the closed region under the cursor
+                    match hatch_region_at(doc, cursor) {
+                        Some(region) => {
+                            let lines = sketchcad_bim::hatch_lines(&region, hatch_settings.0, hatch_settings.1, hatch_settings.2);
+                            for (a, b) in lines.iter().take(4000) {
+                                painter.line_segment([to_screen(*a), to_screen(*b)], guide);
+                            }
+                            draw_path(&region, true, preview);
+                            label("點擊填充此區域".into());
+                            if input.clicked {
+                                create(make(region, true), doc, status_msg);
+                            }
+                        }
+                        None => {
+                            label("點擊封閉區域內部填充，或點選頂點自訂邊界".into());
+                            if input.clicked {
+                                self.draft_points.push(cursor);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                if input.clicked {
+                    if closing {
+                        create(make(std::mem::take(&mut self.draft_points), true), doc, status_msg);
+                        return;
+                    }
+                    if self.draft_points.last().is_none_or(|p| p.distance(cursor) > 1.0) {
+                        self.draft_points.push(cursor);
+                    }
+                }
+                if input.finish {
+                    if self.draft_points.len() >= min_points {
+                        create(make(std::mem::take(&mut self.draft_points), hatch), doc, status_msg);
+                    } else {
+                        self.draft_points.clear();
+                    }
+                } else if !self.draft_points.is_empty() {
+                    let hint = if spline { "Enter / 右鍵 / 雙擊 完成曲線" } else if hatch { "點回起點或 Enter 完成填充邊界" } else { "點回起點封閉 · Enter / 右鍵 / 雙擊 完成" };
+                    label(format!("{} 點 · {hint}", self.draft_points.len()));
+                }
+            }
+            ToolMode::DraftCircle => {
+                if let Some(&center) = self.draft_points.first() {
+                    let radius = center.distance(cursor);
+                    draw_path(&DraftGeometry::Circle { center, radius }.outline().0, true, preview);
+                    draw_path(&[center, cursor], false, guide);
+                    label(format!("半徑 {radius:.0} mm"));
+                    if input.clicked && radius > 1.0 {
+                        create(DraftGeometry::Circle { center, radius }, doc, status_msg);
+                        self.draft_points.clear();
+                    }
+                } else if input.clicked {
+                    self.draft_points.push(cursor);
+                }
+            }
+            ToolMode::DraftArc => {
+                match self.draft_points.as_slice() {
+                    [] => {
+                        label("點選弧的起點".into());
+                        if input.clicked {
+                            self.draft_points.push(cursor);
+                        }
+                    }
+                    [start] => {
+                        draw_path(&[*start, cursor], false, guide);
+                        label("點選弧上第二點".into());
+                        if input.clicked && start.distance(cursor) > 1.0 {
+                            self.draft_points.push(cursor);
+                        }
+                    }
+                    [start, mid, ..] => {
+                        let (start, mid) = (*start, *mid);
+                        match DraftGeometry::arc_through(start, mid, cursor) {
+                            Some(arc) => {
+                                draw_path(&arc.outline().0, false, preview);
+                                if let DraftGeometry::Arc { radius, sweep_deg, .. } = arc {
+                                    label(format!("半徑 {radius:.0} mm · 夾角 {:.1}° · 點選終點", sweep_deg.abs()));
+                                }
+                                if input.clicked {
+                                    create(arc, doc, status_msg);
+                                    self.draft_points.clear();
+                                }
+                            }
+                            None => draw_path(&[start, mid, cursor], false, guide),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Plan primitives of an element (empty when it does not exist).
+fn element_prims(doc: &BimDocument, id: ElementId) -> Vec<sketchcad_geom::Polyline2D> {
+    doc.get_element(id).map(|e| e.to_2d_primitives()).unwrap_or_default()
+}
+
+/// Centre of an element's plan drawing (reference point for path arrays).
+fn element_anchor(doc: &BimDocument, id: ElementId) -> Option<Point2D> {
+    let prims = element_prims(doc, id);
+    let pts: Vec<Point2D> = prims.iter().flat_map(|p| p.vertices.iter().copied()).collect();
+    sketchcad_core::BBox2D::from_points(&pts).map(|b| b.center())
+}
+
+/// `count` points evenly spaced along a drafting path (by length, both ends included).
+fn path_points(geometry: &sketchcad_bim::DraftGeometry, count: usize) -> Vec<Point2D> {
+    let (mut pts, closed) = geometry.outline();
+    if closed && !pts.is_empty() {
+        pts.push(pts[0]);
+    }
+    let mut cum = vec![0.0];
+    for w in pts.windows(2) {
+        cum.push(cum.last().unwrap() + w[0].distance(w[1]));
+    }
+    let total = *cum.last().unwrap_or(&0.0);
+    if pts.len() < 2 || total <= 0.0 || count == 0 {
+        return Vec::new();
+    }
+    let steps = if closed { count } else { count.saturating_sub(1).max(1) };
+    (0..count)
+        .map(|k| {
+            let s = total * k as f64 / steps as f64;
+            let i = cum.partition_point(|&c| c <= s).clamp(1, pts.len() - 1);
+            let t = if cum[i] - cum[i - 1] > 1e-12 { (s - cum[i - 1]) / (cum[i] - cum[i - 1]) } else { 0.0 };
+            pts[i - 1] + (pts[i] - pts[i - 1]) * t
+        })
+        .collect()
+}
+
+impl Viewport2D {
+    /// Preview and input handling of the 修改 tools.
+    #[allow(clippy::too_many_arguments)]
+    fn modify_tool_ui(
+        &mut self,
+        tool: ToolMode,
+        input: DraftInput,
+        shift: bool,
+        cursor: Point2D,
+        picked: Option<ElementId>,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point2D) -> Pos2,
+        doc: &mut BimDocument,
+        undo_stack: &mut Vec<BimDocument>,
+        selected_id: &mut Option<ElementId>,
+        status_msg: &mut String,
+    ) {
+        use sketchcad_bim::{Corner, DraftGeometry, Transform2D};
+        let ghost_stroke = Stroke::new(1.5, Color32::from_rgb(120, 230, 160));
+        let pick_stroke = Stroke::new(2.4, Color32::from_rgb(255, 200, 90));
+        let remove_stroke = Stroke::new(2.4, Color32::from_rgb(255, 90, 90));
+        let draw_prims = |prims: &[sketchcad_geom::Polyline2D], map: &dyn Fn(Point2D) -> Point2D, stroke: Stroke| {
+            for prim in prims {
+                let pts: Vec<Pos2> = prim.vertices.iter().map(|&p| to_screen(map(p))).collect();
+                for w in pts.windows(2) {
+                    painter.line_segment([w[0], w[1]], stroke);
+                }
+                if prim.closed && pts.len() > 2 {
+                    painter.line_segment([pts[pts.len() - 1], pts[0]], stroke);
+                }
+            }
+        };
+        let draw_geometry = |g: &DraftGeometry, stroke: Stroke| {
+            let (pts, closed) = g.outline();
+            draw_prims(&[sketchcad_geom::Polyline2D::new(pts, closed)], &|p| p, stroke);
+        };
+        let label = |text: &str| {
+            painter.text(to_screen(cursor) + egui::vec2(14.0, -16.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::monospace(12.0), Color32::from_rgb(150, 235, 180));
+        };
+        for p in &self.draft_points {
+            painter.circle_filled(to_screen(*p), 3.5, Color32::from_rgb(255, 215, 0));
+        }
+        if input.finish {
+            self.draft_points.clear();
+            self.modify_target = None;
+            return;
+        }
+        let settings = self.modify.clone();
+        let target = selected_id.filter(|id| doc.get_element(*id).is_some());
+        // Drafting entity under the cursor (hatches excluded for line edits)
+        let picked_draft = picked.filter(|id| doc.get_draft(*id).is_some_and(|d| !matches!(d.geometry, DraftGeometry::Hatch { .. })));
+        let identity = |p: Point2D| p;
+
+        // Tools that act on the selection ask for an object first
+        let needs_target = matches!(tool, ToolMode::Copy | ToolMode::Mirror | ToolMode::Rotate | ToolMode::Scale | ToolMode::Array);
+        if needs_target && target.is_none() {
+            if let Some(id) = picked {
+                draw_prims(&element_prims(doc, id), &identity, pick_stroke);
+            }
+            label("請先點選要操作的物件");
+            if input.clicked {
+                *selected_id = picked;
+            }
+            return;
+        }
+        // Only the selection tools above use `target`; the others pick under the cursor
+        let target_prims = target.map(|id| element_prims(doc, id)).unwrap_or_default();
+        let target = target.unwrap_or_else(ElementId::new);
+
+        match tool {
+            ToolMode::Erase => {
+                if let Some(id) = picked {
+                    draw_prims(&element_prims(doc, id), &identity, remove_stroke);
+                    if input.clicked {
+                        push_undo(undo_stack, doc);
+                        let name = doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
+                        doc.remove_element(id);
+                        if *selected_id == Some(id) {
+                            *selected_id = None;
+                        }
+                        *status_msg = format!("✔ 已刪除 {name}");
+                    }
+                } else {
+                    label("點選要刪除的物件");
+                }
+            }
+            ToolMode::Copy => match self.draft_points.first().copied() {
+                None => {
+                    label("點選複製的基準點");
+                    if input.clicked {
+                        self.draft_points.push(cursor);
+                    }
+                }
+                Some(base) => {
+                    let delta = cursor - base;
+                    draw_prims(&target_prims, &|p| p + delta, ghost_stroke);
+                    painter.line_segment([to_screen(base), to_screen(cursor)], Stroke::new(1.0, Color32::from_rgb(255, 215, 0)));
+                    label(&format!("ΔX {:.0} · ΔY {:.0} mm · 連續點擊放置，Enter / 右鍵結束", delta.x, delta.y));
+                    if input.clicked && delta.length() > 1e-6 {
+                        if let Some(source) = doc.get_element(target).map(|e| e.clone_box()) {
+                            push_undo(undo_stack, doc);
+                            doc.paste_element(source.as_ref(), sketchcad_core::Vector3D::new(delta.x, delta.y, 0.0));
+                            *status_msg = format!("✔ 已複製 (ΔX {:.0}, ΔY {:.0} mm)", delta.x, delta.y);
+                        }
+                    }
+                }
+            },
+            ToolMode::Mirror | ToolMode::Rotate | ToolMode::Scale => {
+                let xf = match (tool, self.draft_points.first().copied()) {
+                    (ToolMode::Scale, _) => Some(Transform2D::scale(cursor, settings.scale_factor)),
+                    (_, None) => None,
+                    (ToolMode::Mirror, Some(a)) => (a.distance(cursor) > 1.0).then(|| Transform2D::mirror(a, cursor)),
+                    (_, Some(base)) => {
+                        let v = cursor - base;
+                        let mut angle = v.y.atan2(v.x).to_degrees();
+                        angle = if shift { (angle / 15.0).round() * 15.0 } else { angle.round() };
+                        Some(Transform2D::rotation(base, angle))
+                    }
+                };
+                match (tool, xf) {
+                    (ToolMode::Scale, Some(xf)) => {
+                        draw_prims(&target_prims, &|p| xf.point(p), ghost_stroke);
+                        label(&format!("點擊基準點，以 {:.2} 倍縮放", settings.scale_factor));
+                    }
+                    (ToolMode::Mirror, None) => label("點選鏡射軸的第一點"),
+                    (ToolMode::Mirror, Some(xf)) => {
+                        let a = self.draft_points[0];
+                        painter.extend(egui::Shape::dashed_line(&[to_screen(a), to_screen(cursor)], Stroke::new(1.2, Color32::from_rgb(255, 215, 0)), 8.0, 5.0));
+                        draw_prims(&target_prims, &|p| xf.point(p), ghost_stroke);
+                        label(if settings.mirror_erase_source { "點選鏡射軸第二點 (刪除原物件)" } else { "點選鏡射軸第二點" });
+                    }
+                    (_, None) => label("點選旋轉基準點"),
+                    (_, Some(xf)) => {
+                        draw_prims(&target_prims, &|p| xf.point(p), ghost_stroke);
+                        let base = self.draft_points[0];
+                        painter.line_segment([to_screen(base), to_screen(cursor)], Stroke::new(1.0, Color32::from_rgb(255, 215, 0)));
+                        label(&format!("旋轉 {:.0}° (Shift = 15° 間隔)", xf.x_angle_deg()));
+                    }
+                }
+                if input.clicked {
+                    match xf {
+                        None => self.draft_points.push(cursor),
+                        Some(xf) => {
+                            push_undo(undo_stack, doc);
+                            let keep_source = tool == ToolMode::Mirror && !settings.mirror_erase_source;
+                            let subject = if keep_source {
+                                doc.get_element(target).map(|e| e.clone_box()).map(|src| doc.paste_element(src.as_ref(), sketchcad_core::Vector3D::ZERO))
+                            } else {
+                                Some(target)
+                            };
+                            if let Some(subject) = subject {
+                                match doc.transform_element(subject, &xf) {
+                                    Ok(()) => {
+                                        *status_msg = format!(
+                                            "✔ 已{}",
+                                            match tool {
+                                                ToolMode::Mirror => "鏡射",
+                                                ToolMode::Rotate => "旋轉",
+                                                _ => "縮放",
+                                            }
+                                        );
+                                        if keep_source {
+                                            *selected_id = Some(subject);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        undo_stack.pop();
+                                        if keep_source {
+                                            doc.remove_element(subject);
+                                        }
+                                        *status_msg = format!("✖ {e}");
+                                    }
+                                }
+                            }
+                            self.draft_points.clear();
+                        }
+                    }
+                }
+            }
+            ToolMode::Array => {
+                let mut copies: Vec<Transform2D> = Vec::new();
+                let hint: String;
+                match settings.array_mode {
+                    ArrayMode::Rectangular => {
+                        for r in 0..settings.array_rows.max(1) {
+                            for c in 0..settings.array_cols.max(1) {
+                                if (r, c) != (0, 0) {
+                                    copies.push(Transform2D::translation(Vector2D::new(c as f64 * settings.array_col_spacing, r as f64 * settings.array_row_spacing)));
+                                }
+                            }
+                        }
+                        hint = format!("{} 列 × {} 欄 · 點擊建立", settings.array_rows, settings.array_cols);
+                    }
+                    ArrayMode::Polar => {
+                        let n = settings.array_count.max(2);
+                        let full = (settings.array_angle.abs() - 360.0).abs() < 1e-6;
+                        let step = settings.array_angle / if full { n as f64 } else { (n - 1) as f64 };
+                        for k in 1..n {
+                            copies.push(Transform2D::rotation(cursor, step * k as f64));
+                        }
+                        painter.circle_filled(to_screen(cursor), 4.0, Color32::from_rgb(255, 215, 0));
+                        hint = format!("點選環形陣列中心 · {n} 個 · {:.0}°", settings.array_angle);
+                    }
+                    ArrayMode::Path => match picked_draft.filter(|id| *id != target).zip(element_anchor(doc, target)) {
+                        Some((path, anchor)) => {
+                            let path_geom = doc.get_draft(path).map(|d| d.geometry.clone());
+                            for p in path_geom.map(|g| path_points(&g, settings.array_count.max(1) as usize)).unwrap_or_default() {
+                                copies.push(Transform2D::translation(p - anchor));
+                            }
+                            hint = format!("沿此路徑排列 {} 個 · 點擊建立", settings.array_count);
+                        }
+                        None => hint = "點選作為路徑的線條 (直線 / 聚合線 / 弧 / 圓 / 雲形線)".into(),
+                    },
+                }
+                copies.truncate(500);
+                for xf in &copies {
+                    draw_prims(&target_prims, &|p| xf.point(p), ghost_stroke);
+                }
+                label(&hint);
+                if input.clicked && !copies.is_empty() {
+                    push_undo(undo_stack, doc);
+                    let mut made = 0;
+                    let mut failure = None;
+                    for xf in &copies {
+                        let Some(source) = doc.get_element(target).map(|e| e.clone_box()) else { break };
+                        let copy = doc.paste_element(source.as_ref(), sketchcad_core::Vector3D::ZERO);
+                        let result = if xf.x == Vector2D::X && xf.y == Vector2D::Y {
+                            doc.move_element(copy, sketchcad_core::Vector3D::new(xf.t.x, xf.t.y, 0.0));
+                            Ok(())
+                        } else {
+                            doc.transform_element(copy, xf)
+                        };
+                        match result {
+                            Ok(()) => made += 1,
+                            Err(e) => {
+                                doc.remove_element(copy);
+                                failure = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    *status_msg = match failure {
+                        Some(e) => format!("✖ {e}"),
+                        None => format!("✔ 已建立{} ({made} 個複本)", settings.array_mode.label()),
+                    };
+                }
+            }
+            ToolMode::Offset => match self.modify_target {
+                None => match picked_draft {
+                    Some(id) => {
+                        draw_prims(&element_prims(doc, id), &identity, pick_stroke);
+                        label(&format!("點選要偏移的物件 (距離 {:.0} mm)", settings.offset_distance));
+                        if input.clicked {
+                            self.modify_target = Some((id, cursor));
+                        }
+                    }
+                    None => label(&format!("點選要偏移的線條 (距離 {:.0} mm)", settings.offset_distance)),
+                },
+                Some((id, _)) => {
+                    let result = doc.get_draft(id).and_then(|d| d.geometry.offset(settings.offset_distance, cursor));
+                    draw_prims(&element_prims(doc, id), &identity, pick_stroke);
+                    match result {
+                        Some(g) => {
+                            draw_geometry(&g, ghost_stroke);
+                            label("點選偏移的一側");
+                            if input.clicked {
+                                push_undo(undo_stack, doc);
+                                *selected_id = doc.add_draft_like(id, g);
+                                *status_msg = format!("✔ 已偏移 {:.0} mm", settings.offset_distance);
+                                self.modify_target = None;
+                            }
+                        }
+                        None => label("此側無法偏移 (距離大於半徑？)"),
+                    }
+                }
+            },
+            ToolMode::Trim | ToolMode::Extend => match picked_draft {
+                Some(id) => {
+                    let edges = doc.cutting_edges(id);
+                    let geometry = doc.get_draft(id).map(|d| d.geometry.clone());
+                    let pieces = geometry.as_ref().and_then(|g| if tool == ToolMode::Trim { g.trim(&edges, cursor) } else { g.extend(&edges, cursor).map(|g| vec![g]) });
+                    match pieces {
+                        Some(pieces) => {
+                            draw_prims(&element_prims(doc, id), &identity, if tool == ToolMode::Trim { remove_stroke } else { pick_stroke });
+                            for g in &pieces {
+                                draw_geometry(g, Stroke::new(2.4, Color32::from_rgb(120, 230, 160)));
+                            }
+                            label(if tool == ToolMode::Trim { "點擊修剪紅色部分" } else { "點擊延伸到邊界" });
+                            if input.clicked {
+                                push_undo(undo_stack, doc);
+                                let ids = doc.replace_draft(id, pieces);
+                                *selected_id = ids.first().copied();
+                                *status_msg = if tool == ToolMode::Trim { "✔ 已修剪".into() } else { "✔ 已延伸".into() };
+                            }
+                        }
+                        None => label(if tool == ToolMode::Trim { "此處沒有可修剪的交點" } else { "此方向沒有可延伸到的邊界" }),
+                    }
+                }
+                None => label(if tool == ToolMode::Trim { "點選要剪掉的線段部分" } else { "點選靠近要延伸那一端的線條" }),
+            },
+            ToolMode::Fillet | ToolMode::Chamfer => {
+                let corner = if tool == ToolMode::Fillet { Corner::Fillet(settings.fillet_radius) } else { Corner::Chamfer(settings.chamfer_d1, settings.chamfer_d2) };
+                let line_of = |id: ElementId| match doc.get_draft(id).map(|d| &d.geometry) {
+                    Some(DraftGeometry::Line { start, end }) => Some((*start, *end)),
+                    _ => None,
+                };
+                match self.modify_target {
+                    None => match picked_draft.map(|id| (id, doc.get_draft(id).map(|d| d.geometry.clone()))) {
+                        Some((id, Some(DraftGeometry::Polyline { points, closed }))) => {
+                            match sketchcad_bim::corner_polyline(&points, closed, cursor, corner) {
+                                Some(new_points) => {
+                                    let g = DraftGeometry::Polyline { points: new_points, closed };
+                                    draw_geometry(&g, ghost_stroke);
+                                    label("點擊處理此聚合線轉角");
+                                    if input.clicked {
+                                        push_undo(undo_stack, doc);
+                                        doc.replace_draft(id, vec![g]);
+                                        *status_msg = "✔ 已處理轉角".into();
+                                    }
+                                }
+                                None => label("轉角太短，無法套用此尺寸"),
+                            }
+                        }
+                        Some((id, Some(DraftGeometry::Line { .. }))) => {
+                            draw_prims(&element_prims(doc, id), &identity, pick_stroke);
+                            label("點選第一條直線");
+                            if input.clicked {
+                                self.modify_target = Some((id, cursor));
+                            }
+                        }
+                        _ => label("點選第一條直線，或聚合線的轉角"),
+                    },
+                    Some((first, pick1)) => {
+                        draw_prims(&element_prims(doc, first), &identity, pick_stroke);
+                        let second = picked_draft.filter(|id| *id != first);
+                        match second.and_then(|id| Some((id, line_of(first)?, line_of(id)?))) {
+                            Some((id2, l1, l2)) => match sketchcad_bim::corner_lines(l1, pick1, l2, cursor, corner) {
+                                Some((a, b, extra)) => {
+                                    for g in [Some(&a), Some(&b), extra.as_ref()].into_iter().flatten() {
+                                        draw_geometry(g, ghost_stroke);
+                                    }
+                                    label("點擊完成");
+                                    if input.clicked {
+                                        push_undo(undo_stack, doc);
+                                        doc.replace_draft(first, vec![a]);
+                                        doc.replace_draft(id2, vec![b]);
+                                        if let Some(g) = extra {
+                                            doc.add_draft_like(first, g);
+                                        }
+                                        *status_msg = format!("✔ 已{}", if tool == ToolMode::Fillet { "圓角" } else { "導角" });
+                                        self.modify_target = None;
+                                    }
+                                }
+                                None => label("平行線或尺寸過大，無法處理"),
+                            },
+                            None => label("點選第二條直線"),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Draws `a→b` with a dash pattern (alternating dash / gap lengths in pixels), starting
+/// `phase` pixels into the pattern so consecutive segments of a curve continue it.
+fn patterned_segment(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke, pattern: &[f32], phase: f32) {
+    let length = (b - a).length();
+    let period: f32 = pattern.iter().sum();
+    if length < 1e-3 || period <= 0.0 {
+        return;
+    }
+    let dir = (b - a) / length;
+    // Locate the phase inside the pattern
+    let mut p = phase.rem_euclid(period);
+    let mut k = 0;
+    while p >= pattern[k] {
+        p -= pattern[k];
+        k = (k + 1) % pattern.len();
+    }
+    let mut s = 0.0;
+    let mut remaining = pattern[k] - p;
+    while s < length {
+        let e = (s + remaining).min(length);
+        if k % 2 == 0 {
+            painter.line_segment([a + dir * s, a + dir * e], stroke);
+        }
+        s = e;
+        k = (k + 1) % pattern.len();
+        remaining = pattern[k];
+    }
+}
+
+/// Default colour of dimensions, text and leaders.
+pub const ANNOTATION_COLOR: Color32 = Color32::from_rgb(140, 220, 255);
+
+/// Draws an annotation's texts; `px_per_mm` converts the text height to screen pixels.
+pub fn draw_annotation_texts(painter: &egui::Painter, a: &sketchcad_bim::Annotation, to_screen: &dyn Fn(Point2D) -> Pos2, px_per_mm: f32, color: Color32) {
+    for t in a.texts() {
+        // Cap height ≈ 0.72 of the font size
+        let size = t.height as f32 * px_per_mm / 0.72;
+        if !(3.0..=400.0).contains(&size) {
+            continue;
+        }
+        let galley = painter.layout(t.text.clone(), egui::FontId::proportional(size), color, f32::INFINITY);
+        let angle = -(t.angle_deg as f32).to_radians();
+        let (s, c) = angle.sin_cos();
+        let rotate = |v: egui::Vec2| egui::vec2(v.x * c - v.y * s, v.x * s + v.y * c);
+        let anchor = to_screen(t.position);
+        let top_left = if t.centered { anchor - rotate(galley.size() * 0.5) } else { anchor };
+        painter.add(egui::epaint::TextShape::new(top_left, galley, color).with_angle(angle));
+    }
+}
+
+/// Characteristic points of the objects inside a window (QDIM): line end points, polyline
+/// vertices, circle / arc centres, wall end points and column centres.
+fn qdim_points(doc: &BimDocument, min: Point2D, max: Point2D) -> Vec<Point2D> {
+    use sketchcad_bim::DraftGeometry;
+    let inside = |p: &Point2D| p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
+    let mut pts = Vec::new();
+    for elem in doc.all_elements() {
+        let id = elem.id();
+        if let Some(d) = doc.get_draft(id) {
+            match &d.geometry {
+                DraftGeometry::Line { start, end } => pts.extend([*start, *end]),
+                DraftGeometry::Polyline { points, .. } => pts.extend(points.iter().copied()),
+                DraftGeometry::Circle { center, .. } | DraftGeometry::Arc { center, .. } => pts.push(*center),
+                DraftGeometry::Spline { points } => pts.extend([points[0], points[points.len() - 1]]),
+                DraftGeometry::Hatch { .. } => {}
+            }
+        } else if let Some(w) = doc.get_wall(id) {
+            pts.extend([w.start, w.end]);
+        } else if let Some(c) = doc.get_column(id) {
+            pts.push(c.position);
+        }
+    }
+    pts.retain(inside);
+    pts
+}
+
+/// Rays (from `x`, along ±`u1` / ±`u2`) whose angle contains `toward`: `(start_deg, sweep_deg)`.
+fn angle_between_rays(u1: Vector2D, u2: Vector2D, toward: Vector2D, both_ways: bool) -> (f64, f64) {
+    let deg = |v: Vector2D| v.y.atan2(v.x).to_degrees();
+    let target = deg(toward);
+    let signs: &[f64] = if both_ways { &[1.0, -1.0] } else { &[1.0] };
+    let mut best = (deg(u1), (deg(u2) - deg(u1)).rem_euclid(360.0));
+    for &s1 in signs {
+        for &s2 in signs {
+            for (a, b) in [(u1 * s1, u2 * s2), (u2 * s2, u1 * s1)] {
+                let (start, sweep) = (deg(a), (deg(b) - deg(a)).rem_euclid(360.0));
+                let inside = (target - start).rem_euclid(360.0) <= sweep;
+                if inside && (both_ways && sweep < 180.0 + 1e-9 || !both_ways) {
+                    best = (start, sweep);
+                    return best;
+                }
+            }
+        }
+    }
+    best
+}
+
+impl Viewport2D {
+    /// Elevation of the level being annotated (same as drafting).
+    fn annotate_elevation(&self) -> f64 {
+        self.draft_elevation()
+    }
+
+    /// Linear dimension of `p1`→`p2` whose dimension line passes through `cursor`.
+    fn linear_dim(p1: Point2D, p2: Point2D, axis: sketchcad_bim::DimAxis, cursor: Point2D) -> sketchcad_bim::AnnotationGeometry {
+        let d = sketchcad_bim::AnnotationGeometry::linear_direction(p1, p2, axis);
+        sketchcad_bim::AnnotationGeometry::Linear { p1, p2, axis, offset: (cursor - p1).dot(d.perp()) }
+    }
+
+    /// DIMLINEAR orientation (AutoCAD rule): measure horizontally when the cursor is above /
+    /// below the two points, vertically when it is beside them.
+    fn auto_axis(p1: Point2D, p2: Point2D, cursor: Point2D) -> sketchcad_bim::DimAxis {
+        let (min, max) = (p1.min(p2), p1.max(p2));
+        let out_x = (min.x - cursor.x).max(cursor.x - max.x).max(0.0);
+        let out_y = (min.y - cursor.y).max(cursor.y - max.y).max(0.0);
+        if out_y >= out_x { sketchcad_bim::DimAxis::Horizontal } else { sketchcad_bim::DimAxis::Vertical }
+    }
+
+    /// Previous linear dimension for DIMCONTINUE / DIMBASELINE: the selection if it is one,
+    /// else the last one created.
+    fn base_dim(&self, doc: &BimDocument, selected: Option<ElementId>) -> Option<(Point2D, Point2D, sketchcad_bim::DimAxis, f64)> {
+        [selected, self.last_dim].into_iter().flatten().find_map(|id| match doc.get_annotation(id).map(|a| &a.geometry) {
+            Some(sketchcad_bim::AnnotationGeometry::Linear { p1, p2, axis, offset }) => Some((*p1, *p2, *axis, *offset)),
+            _ => None,
+        })
+    }
+
+    /// Preview and input handling of the 註解 tools.
+    #[allow(clippy::too_many_arguments)]
+    fn annotate_tool_ui(
+        &mut self,
+        tool: ToolMode,
+        input: DraftInput,
+        cursor: Point2D,
+        hover_screen: Pos2,
+        picked: Option<ElementId>,
+        painter: &egui::Painter,
+        to_screen: &impl Fn(Point2D) -> Pos2,
+        doc: &mut BimDocument,
+        undo_stack: &mut Vec<BimDocument>,
+        selected_id: &mut Option<ElementId>,
+        status_msg: &mut String,
+    ) {
+        use sketchcad_bim::{Annotation, AnnotationGeometry, DimAxis, DraftGeometry};
+        let h = self.annotate.text_height;
+        let elevation = self.annotate_elevation();
+        let ghost = Color32::from_rgb(120, 230, 160);
+        let zoom = self.camera.zoom as f32;
+        let preview = |g: &AnnotationGeometry| {
+            let ann = Annotation::new(g.clone(), elevation, h);
+            for prim in sketchcad_bim::BimElement::to_2d_primitives(&ann) {
+                let pts: Vec<Pos2> = prim.vertices.iter().map(|&p| to_screen(p)).collect();
+                for w in pts.windows(2) {
+                    painter.line_segment([w[0], w[1]], Stroke::new(1.3, ghost));
+                }
+                if prim.closed && pts.len() > 2 {
+                    painter.line_segment([pts[pts.len() - 1], pts[0]], Stroke::new(1.3, ghost));
+                }
+            }
+            draw_annotation_texts(painter, &ann, to_screen, zoom, ghost);
+        };
+        let label = |text: &str| {
+            painter.text(to_screen(cursor) + egui::vec2(14.0, -16.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::monospace(12.0), Color32::from_rgb(150, 235, 180));
+        };
+        for p in &self.draft_points {
+            painter.circle_filled(to_screen(*p), 3.5, Color32::from_rgb(255, 215, 0));
+        }
+        if input.finish {
+            self.draft_points.clear();
+            self.dim_source = None;
+            return;
+        }
+        let mut created: Vec<AnnotationGeometry> = Vec::new();
+        // Object under the cursor as a dimension source
+        let source_of = |id: ElementId| -> Option<DimSource> {
+            if let Some(d) = doc.get_draft(id) {
+                return match d.geometry {
+                    DraftGeometry::Line { start, end } => Some(DimSource::Segment(start, end)),
+                    DraftGeometry::Circle { center, radius } => Some(DimSource::Circle { center, radius }),
+                    DraftGeometry::Arc { center, radius, start_deg, sweep_deg } => Some(DimSource::Arc { center, radius, start_deg, sweep_deg }),
+                    _ => None,
+                };
+            }
+            doc.get_wall(id).map(|w| DimSource::Segment(w.start, w.end))
+        };
+        let hovered = picked.and_then(source_of);
+
+        match tool {
+            ToolMode::Dim | ToolMode::DimLinear | ToolMode::DimAligned => {
+                let aligned = tool == ToolMode::DimAligned;
+                // DIM: lines, circles and arcs under the cursor are dimensioned directly
+                if tool == ToolMode::Dim && self.draft_points.is_empty() && self.dim_source.is_none() {
+                    let pending = match hovered {
+                        Some(DimSource::Segment(a, b)) => {
+                            let axis = if (b - a).x.abs() < 1e-6 { DimAxis::Vertical } else if (b - a).y.abs() < 1e-6 { DimAxis::Horizontal } else { DimAxis::Aligned };
+                            label("點擊此線條標註長度；或點選兩點");
+                            Some((DimSource::Segment(a, b), Self::linear_dim(a, b, axis, cursor + (b - a).perp().normalize_or_zero() * h * 2.0)))
+                        }
+                        Some(DimSource::Circle { center, radius }) => {
+                            label("點擊此圓標註直徑");
+                            Some((DimSource::Circle { center, radius }, AnnotationGeometry::Diameter { center, radius, angle_deg: 45.0 }))
+                        }
+                        Some(src @ DimSource::Arc { center, radius, .. }) => {
+                            label("點擊此弧標註半徑");
+                            Some((src, AnnotationGeometry::Radius { center, radius, angle_deg: 45.0 }))
+                        }
+                        _ => None,
+                    };
+                    if let Some((src, g)) = pending {
+                        preview(&g);
+                        if input.clicked {
+                            self.dim_source = Some(src);
+                        }
+                        return;
+                    }
+                }
+                if let Some(src) = self.dim_source {
+                    let g = match src {
+                        DimSource::Segment(a, b) => {
+                            let axis = if (b - a).x.abs() < 1e-6 || (b - a).y.abs() < 1e-6 { Self::auto_axis(a, b, cursor) } else { DimAxis::Aligned };
+                            Self::linear_dim(a, b, axis, cursor)
+                        }
+                        DimSource::Circle { center, radius } => {
+                            let v = cursor - center;
+                            AnnotationGeometry::Diameter { center, radius, angle_deg: v.y.atan2(v.x).to_degrees() }
+                        }
+                        DimSource::Arc { center, radius, .. } => {
+                            let v = cursor - center;
+                            AnnotationGeometry::Radius { center, radius, angle_deg: v.y.atan2(v.x).to_degrees() }
+                        }
+                        _ => return,
+                    };
+                    preview(&g);
+                    label("點選標註位置");
+                    if input.clicked {
+                        created.push(g);
+                        self.dim_source = None;
+                    }
+                } else {
+                    match self.draft_points.as_slice() {
+                        [] => {
+                            label(if aligned { "點選第一個延伸線原點 (斜邊起點)" } else { "點選第一個延伸線原點" });
+                            if input.clicked {
+                                self.draft_points.push(cursor);
+                            }
+                        }
+                        [p1] => {
+                            painter.line_segment([to_screen(*p1), to_screen(cursor)], Stroke::new(1.0, Color32::from_rgb(255, 215, 0)));
+                            label("點選第二個延伸線原點");
+                            if input.clicked && p1.distance(cursor) > 1.0 {
+                                self.draft_points.push(cursor);
+                            }
+                        }
+                        [p1, p2, ..] => {
+                            let axis = if aligned { DimAxis::Aligned } else { Self::auto_axis(*p1, *p2, cursor) };
+                            let g = Self::linear_dim(*p1, *p2, axis, cursor);
+                            preview(&g);
+                            label("點選標註線位置");
+                            if input.clicked {
+                                created.push(g);
+                                self.draft_points.clear();
+                            }
+                        }
+                    }
+                }
+            }
+            ToolMode::DimAngular => match self.dim_source {
+                None => match (hovered, self.draft_points.as_slice()) {
+                    (Some(DimSource::Segment(a, b)), []) => {
+                        label("點選第一條直線 (或點選弧)");
+                        if input.clicked {
+                            self.dim_source = Some(DimSource::Line(a, b));
+                        }
+                    }
+                    (Some(src @ DimSource::Arc { .. }), []) => {
+                        label("點選弧標註圓心角");
+                        if input.clicked {
+                            self.dim_source = Some(src);
+                        }
+                    }
+                    (_, []) => {
+                        label("點選第一條直線、弧，或點選角的頂點");
+                        if input.clicked {
+                            self.draft_points.push(cursor);
+                        }
+                    }
+                    (_, [_v]) => {
+                        label("點選角的第一個端點");
+                        if input.clicked {
+                            self.draft_points.push(cursor);
+                        }
+                    }
+                    (_, [v, a]) => {
+                        label("點選角的第二個端點");
+                        painter.line_segment([to_screen(*v), to_screen(*a)], Stroke::new(1.0, Color32::from_rgb(255, 215, 0)));
+                        if input.clicked {
+                            self.draft_points.push(cursor);
+                        }
+                    }
+                    (_, [v, a, b, ..]) => {
+                        let (start, sweep) = angle_between_rays(*a - *v, *b - *v, cursor - *v, false);
+                        let g = AnnotationGeometry::Angular { center: *v, start_deg: start, sweep_deg: sweep, radius: v.distance(cursor) };
+                        preview(&g);
+                        label("點選標註弧位置");
+                        if input.clicked {
+                            created.push(g);
+                            self.draft_points.clear();
+                        }
+                    }
+                },
+                Some(DimSource::Line(a1, b1)) => match hovered {
+                    Some(DimSource::Segment(a2, b2)) if (a2, b2) != (a1, b1) => {
+                        label("點選第二條直線");
+                        if input.clicked {
+                            self.dim_source = Some(DimSource::Lines((a1, b1), (a2, b2)));
+                        }
+                    }
+                    _ => label("點選第二條直線"),
+                },
+                Some(DimSource::Lines((a1, b1), (a2, b2))) => {
+                    let (u, v) = (b1 - a1, b2 - a2);
+                    let denom = u.perp_dot(v);
+                    if denom.abs() < 1e-9 {
+                        label("兩線平行，無法標註角度");
+                        if input.clicked {
+                            self.dim_source = None;
+                        }
+                        return;
+                    }
+                    let x = a1 + u * ((a2 - a1).perp_dot(v) / denom);
+                    let (start, sweep) = angle_between_rays(u, v, cursor - x, true);
+                    let g = AnnotationGeometry::Angular { center: x, start_deg: start, sweep_deg: sweep, radius: x.distance(cursor) };
+                    preview(&g);
+                    label("點選標註弧位置 (決定量測哪一側的角)");
+                    if input.clicked {
+                        created.push(g);
+                        self.dim_source = None;
+                    }
+                }
+                Some(DimSource::Arc { center, start_deg, sweep_deg, .. }) => {
+                    let (start, sweep) = if sweep_deg < 0.0 { (start_deg + sweep_deg, -sweep_deg) } else { (start_deg, sweep_deg) };
+                    let g = AnnotationGeometry::Angular { center, start_deg: start, sweep_deg: sweep, radius: center.distance(cursor) };
+                    preview(&g);
+                    label("點選標註弧位置");
+                    if input.clicked {
+                        created.push(g);
+                        self.dim_source = None;
+                    }
+                }
+                _ => self.dim_source = None,
+            },
+            ToolMode::DimRadius | ToolMode::DimDiameter => {
+                let radius_mode = tool == ToolMode::DimRadius;
+                match self.dim_source {
+                    Some(DimSource::Circle { center, radius }) | Some(DimSource::Arc { center, radius, .. }) => {
+                        let v = cursor - center;
+                        let angle_deg = v.y.atan2(v.x).to_degrees();
+                        let g = if radius_mode { AnnotationGeometry::Radius { center, radius, angle_deg } } else { AnnotationGeometry::Diameter { center, radius, angle_deg } };
+                        preview(&g);
+                        label("點選標註方向");
+                        if input.clicked {
+                            created.push(g);
+                            self.dim_source = None;
+                        }
+                    }
+                    _ => match hovered {
+                        Some(src @ (DimSource::Circle { .. } | DimSource::Arc { .. })) => {
+                            label(if radius_mode { "點選此圓 / 弧標註半徑" } else { "點選此圓 / 弧標註直徑" });
+                            if input.clicked {
+                                self.dim_source = Some(src);
+                            }
+                        }
+                        _ => label("點選圓或弧"),
+                    },
+                }
+            }
+            ToolMode::QDim => match self.draft_points.as_slice() {
+                [] => {
+                    label("框選物件：點選窗框第一角");
+                    if input.clicked {
+                        self.draft_points.push(cursor);
+                    }
+                }
+                [a] => {
+                    let r = Rect::from_two_pos(to_screen(*a), to_screen(cursor));
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.2, Color32::from_rgb(120, 200, 255)), egui::StrokeKind::Middle);
+                    painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(80, 150, 255, 30));
+                    label("點選窗框對角");
+                    if input.clicked && a.distance(cursor) > 1.0 {
+                        self.draft_points.push(cursor);
+                    }
+                }
+                [a, b, ..] => {
+                    let (min, max) = (a.min(*b), a.max(*b));
+                    painter.rect_stroke(Rect::from_two_pos(to_screen(min), to_screen(max)), 0.0, Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 200, 255, 120)), egui::StrokeKind::Middle);
+                    // Horizontal chain when the cursor is above / below the window, else vertical
+                    let horizontal = cursor.y > max.y || cursor.y < min.y || (cursor.x >= min.x && cursor.x <= max.x);
+                    let axis = if horizontal { DimAxis::Horizontal } else { DimAxis::Vertical };
+                    let key = |p: &Point2D| if horizontal { p.x } else { p.y };
+                    let mut pts = qdim_points(doc, min, max);
+                    pts.sort_by(|p, q| key(p).total_cmp(&key(q)));
+                    pts.dedup_by(|p, q| (key(p) - key(q)).abs() < 1.0);
+                    let line = if horizontal { cursor.y } else { cursor.x };
+                    let spacing = self.annotate.stack_spacing * if (horizontal && cursor.y < min.y) || (!horizontal && cursor.x < min.x) { -1.0 } else { 1.0 };
+                    let mut dims = Vec::new();
+                    let make = |p1: Point2D, p2: Point2D, line: f64| {
+                        // Offset from p1 so the dimension line lies at `line`
+                        let n = AnnotationGeometry::linear_direction(p1, p2, axis).perp();
+                        let at = if horizontal { Point2D::new(p1.x, line) } else { Point2D::new(line, p1.y) };
+                        AnnotationGeometry::Linear { p1, p2, axis, offset: (at - p1).dot(n) }
+                    };
+                    match self.annotate.qdim_mode {
+                        QDimMode::Continuous => dims.extend(pts.windows(2).map(|w| make(w[0], w[1], line))),
+                        QDimMode::Baseline => dims.extend(pts.iter().skip(1).enumerate().map(|(i, p)| make(pts[0], *p, line + spacing * i as f64))),
+                        QDimMode::Staggered => dims.extend(pts.windows(2).enumerate().map(|(i, w)| make(w[0], w[1], line + spacing * (i % 2) as f64))),
+                    }
+                    for g in &dims {
+                        preview(g);
+                    }
+                    label(&format!("{} 個標註點 · {} · 點選標註線位置", pts.len(), self.annotate.qdim_mode.label()));
+                    if input.clicked && !dims.is_empty() {
+                        created.extend(dims);
+                        self.draft_points.clear();
+                    }
+                }
+            },
+            ToolMode::DimContinue | ToolMode::DimBaseline => match self.base_dim(doc, *selected_id) {
+                Some((b1, b2, axis, offset)) => {
+                    let d = AnnotationGeometry::linear_direction(b1, b2, axis);
+                    let n = d.perp();
+                    let line = b1.dot(n) + offset; // dimension line position along n
+                    let g = if tool == ToolMode::DimContinue {
+                        let p2 = if axis == DimAxis::Aligned { b2 + d * (cursor - b2).dot(d) } else { cursor };
+                        AnnotationGeometry::Linear { p1: b2, p2, axis, offset: line - b2.dot(n) }
+                    } else {
+                        let p2 = if axis == DimAxis::Aligned { b1 + d * (cursor - b1).dot(d) } else { cursor };
+                        let sign = if offset < 0.0 { -1.0 } else { 1.0 };
+                        AnnotationGeometry::Linear { p1: b1, p2, axis, offset: offset + sign * self.annotate.stack_spacing }
+                    };
+                    preview(&g);
+                    label(if tool == ToolMode::DimContinue { "點選下一個延伸線原點 (連續標註，Enter 結束)" } else { "點選下一個延伸線原點 (基線標註，Enter 結束)" });
+                    if input.clicked && g.measurement().unwrap_or(0.0) > 1.0 {
+                        created.push(g);
+                    }
+                }
+                None => label("請先建立或選取一個線性標註"),
+            },
+            ToolMode::MText => {
+                label("點選文字的插入位置 (左上角)");
+                if input.clicked {
+                    self.text_editor = Some(TextEditor {
+                        geometry: AnnotationGeometry::Text { position: cursor, text: String::new(), rotation_deg: 0.0 },
+                        text: String::new(),
+                        screen_pos: hover_screen,
+                        focus: true,
+                    });
+                }
+            }
+            ToolMode::MLeader => match self.draft_points.first().copied() {
+                None => {
+                    label("點選引線箭頭位置");
+                    if input.clicked {
+                        self.draft_points.push(cursor);
+                    }
+                }
+                Some(tip) => {
+                    preview(&AnnotationGeometry::Leader { points: vec![tip, cursor], text: "…".into() });
+                    label("點選引線轉折 (文字) 位置");
+                    if input.clicked && tip.distance(cursor) > 1.0 {
+                        self.text_editor = Some(TextEditor {
+                            geometry: AnnotationGeometry::Leader { points: vec![tip, cursor], text: String::new() },
+                            text: String::new(),
+                            screen_pos: hover_screen,
+                            focus: true,
+                        });
+                        self.draft_points.clear();
+                    }
+                }
+            },
+            _ => {}
+        }
+
+        if !created.is_empty() {
+            push_undo(undo_stack, doc);
+            let count = created.len();
+            let mut last = None;
+            for g in created {
+                let linear = matches!(g, AnnotationGeometry::Linear { .. });
+                let id = doc.insert_annotation(g, elevation, h);
+                if linear {
+                    last = Some(id);
+                }
+            }
+            if last.is_some() {
+                self.last_dim = last;
+            }
+            *status_msg = format!("✔ 已建立 {count} 個標註");
+        }
+    }
+
+    /// Floating text box of MTEXT / MLEADER; Ctrl+Enter or 確定 places the annotation.
+    fn render_text_editor(
+        &mut self,
+        ui: &Ui,
+        doc: &mut BimDocument,
+        undo_stack: &mut Vec<BimDocument>,
+        selected_id: &mut Option<ElementId>,
+        status_msg: &mut String,
+    ) {
+        let Some(editor) = &mut self.text_editor else { return };
+        let mut done: Option<bool> = None;
+        let title = if matches!(editor.geometry, sketchcad_bim::AnnotationGeometry::Leader { .. }) { "📝 引線文字 (MLEADER)" } else { "📝 多行文字 (MTEXT)" };
+        egui::Window::new(title)
+            .id(egui::Id::new("annotation_text_editor"))
+            .fixed_pos(editor.screen_pos + egui::vec2(16.0, 16.0))
+            .collapsible(false)
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                let response = ui.add(egui::TextEdit::multiline(&mut editor.text).desired_rows(4).desired_width(260.0).hint_text("輸入說明文字 (可多行)"));
+                if editor.focus {
+                    response.request_focus();
+                    editor.focus = false;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("字高:");
+                    ui.add(egui::DragValue::new(&mut self.annotate.text_height).speed(5.0).range(10.0..=5000.0).suffix(" mm"));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("✔ 確定 (Ctrl+Enter)").clicked() {
+                        done = Some(true);
+                    }
+                    if ui.button("取消 (Esc)").clicked() {
+                        done = Some(false);
+                    }
+                });
+                let (ctrl_enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter) && (i.modifiers.command || i.modifiers.ctrl), i.key_pressed(egui::Key::Escape)));
+                if ctrl_enter {
+                    done = Some(true);
+                } else if esc {
+                    done = Some(false);
+                }
+            });
+        match done {
+            Some(true) => {
+                let Some(editor) = self.text_editor.take() else { return };
+                let text = editor.text.trim_end().to_string();
+                if text.trim().is_empty() {
+                    return;
+                }
+                let geometry = match editor.geometry {
+                    sketchcad_bim::AnnotationGeometry::Text { position, rotation_deg, .. } => sketchcad_bim::AnnotationGeometry::Text { position, text, rotation_deg },
+                    sketchcad_bim::AnnotationGeometry::Leader { points, .. } => sketchcad_bim::AnnotationGeometry::Leader { points, text },
+                    other => other,
+                };
+                push_undo(undo_stack, doc);
+                *selected_id = Some(doc.insert_annotation(geometry, self.annotate_elevation(), self.annotate.text_height));
+                *status_msg = "✔ 已建立文字註解".into();
+            }
+            Some(false) => self.text_editor = None,
+            None => {}
+        }
+    }
 }
 
 fn push_undo(undo_stack: &mut Vec<BimDocument>, doc: &BimDocument) {
@@ -117,6 +1544,17 @@ impl Viewport2D {
             outlet_voltage: OutletVoltage::default(),
             outlet_gangs: 2,
             model_id: None,
+            draft_points: Vec::new(),
+            draft_tool: ToolMode::Select,
+            hatch_pattern: sketchcad_bim::HatchPattern::default(),
+            hatch_spacing: 150.0,
+            hatch_angle: 0.0,
+            modify: ModifySettings::default(),
+            modify_target: None,
+            annotate: AnnotateSettings::default(),
+            dim_source: None,
+            last_dim: None,
+            text_editor: None,
             move_base_pt: None,
             snap_grid_size: 500.0,
             snap_enabled: true,
@@ -328,18 +1766,56 @@ impl Viewport2D {
             let clip = sheet_clip(off);
             let painter = painter.with_clip_rect(clip);
             let clip = clip.expand(4.0);
+            // Dash phase carried along an element's consecutive segments (curves are many
+            // short segments; restarting the pattern on each would make it look solid)
+            let mut dash = (u32::MAX, 0.0f32);
             for line in &self.plan.sheets[si].lines {
                 let a = sheet_to_screen(line.a, off);
                 let b = sheet_to_screen(line.b, off);
+                if dash.0 != line.elem {
+                    dash = (line.elem, 0.0);
+                }
+                let phase = dash.1;
+                dash.1 += (b - a).length();
                 if !clip.intersects(Rect::from_two_pos(a, b)) {
                     continue;
                 }
-                let stroke = line_stroke(line.style);
-                if line.style == LineStyle::Overhead {
-                    painter.extend(egui::Shape::dashed_line(&[a, b], stroke, 7.0, 5.0));
-                } else {
-                    painter.line_segment([a, b], stroke);
+                let mut stroke = line_stroke(line.style);
+                let pen = self.plan.pens.get(&line.elem);
+                if let Some(pen) = pen {
+                    if let Some([r, g, bl, al]) = pen.color {
+                        stroke.color = Color32::from_rgba_unmultiplied(r, g, bl, al);
+                    }
+                    if let Some(width) = pen.width {
+                        stroke.width = width;
+                    }
+                    stroke.color = stroke.color.gamma_multiply(pen.alpha);
                 }
+                match pen.and_then(|p| p.linetype) {
+                    Some(sketchcad_bim::LineType::Dashed) => patterned_segment(&painter, a, b, stroke, &[9.0, 5.0], phase),
+                    Some(sketchcad_bim::LineType::Hidden) => patterned_segment(&painter, a, b, stroke, &[4.0, 3.0], phase),
+                    Some(sketchcad_bim::LineType::Center) => patterned_segment(&painter, a, b, stroke, &[16.0, 4.0, 3.0, 4.0], phase),
+                    _ if line.style == LineStyle::Overhead => painter.extend(egui::Shape::dashed_line(&[a, b], stroke, 7.0, 5.0)),
+                    _ => {
+                        painter.line_segment([a, b], stroke);
+                    }
+                }
+            }
+        }
+
+        // 5a. Annotation text (dimension values, notes, leader text)
+        for &(si, off) in &layout {
+            let painter = painter.with_clip_rect(sheet_clip(off));
+            for id in &self.plan.sheets[si].members {
+                let Some(a) = doc.get_annotation(*id).filter(|_| doc.is_visible(*id)) else { continue };
+                let pen = self.plan.elem_index(*id).and_then(|i| self.plan.pens.get(&i));
+                let color = if *selected_id == Some(*id) {
+                    Color32::from_rgb(255, 215, 0)
+                } else {
+                    let base = pen.and_then(|p| p.color).map_or(ANNOTATION_COLOR, |[r, g, b, al]| Color32::from_rgba_unmultiplied(r, g, b, al));
+                    base.gamma_multiply(pen.map_or(1.0, |p| p.alpha))
+                };
+                draw_annotation_texts(&painter, a, &|p| sheet_to_screen(p, off), zoom as f32, color);
             }
         }
 
@@ -469,6 +1945,42 @@ impl Viewport2D {
 
             // 7. Interactive Drawing Modes (tiled overview and ✋ pan mode: selection only)
             let active_tool = if tiled || self.pan_mode { ToolMode::Select } else { current_tool };
+            if active_tool != self.draft_tool {
+                self.draft_points.clear();
+                self.modify_target = None;
+                self.dim_source = None;
+                self.draft_tool = active_tool;
+            }
+            if active_tool.is_annotate() && self.text_editor.is_none() {
+                let input = DraftInput {
+                    clicked: response.clicked() && !response.double_clicked(),
+                    finish: response.double_clicked()
+                        || response.secondary_clicked()
+                        || (!ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter))),
+                };
+                let picked = self.pick_element(doc, hover_pos, world_pt, center);
+                self.annotate_tool_ui(active_tool, input, world_pt, hover_pos, picked, &painter, &to_screen, doc, undo_stack, selected_id, status_msg);
+            }
+            if active_tool.is_modify() {
+                let input = DraftInput {
+                    clicked: response.clicked() && !response.double_clicked(),
+                    finish: response.double_clicked()
+                        || response.secondary_clicked()
+                        || (!ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter))),
+                };
+                let shift = ui.input(|i| i.modifiers.shift);
+                let picked = self.pick_element(doc, hover_pos, world_pt, center);
+                self.modify_tool_ui(active_tool, input, shift, world_pt, picked, &painter, &to_screen, doc, undo_stack, selected_id, status_msg);
+            }
+            if active_tool.is_drafting() {
+                let input = DraftInput {
+                    clicked: response.clicked() && !response.double_clicked(),
+                    finish: response.double_clicked()
+                        || response.secondary_clicked()
+                        || (!ui.ctx().wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter))),
+                };
+                self.draft_tool_ui(active_tool, input, world_pt, &painter, &to_screen, doc, undo_stack, selected_id, status_msg);
+            }
             match active_tool {
                 ToolMode::Wall => {
                     if let Some(start) = self.wall_start_pt {
@@ -1303,6 +2815,34 @@ impl Viewport2D {
                         *status_msg = format!("✔ 已放置室內家具: {} ({:.0}x{:.0}mm)", kind.display_name(), fw, fd);
                     }
                 }
+                ToolMode::DraftLine
+                | ToolMode::DraftPolyline
+                | ToolMode::DraftCircle
+                | ToolMode::DraftArc
+                | ToolMode::DraftSpline
+                | ToolMode::DraftHatch => {}
+                ToolMode::Erase
+                | ToolMode::Copy
+                | ToolMode::Trim
+                | ToolMode::Extend
+                | ToolMode::Mirror
+                | ToolMode::Offset
+                | ToolMode::Array
+                | ToolMode::Rotate
+                | ToolMode::Scale
+                | ToolMode::Fillet
+                | ToolMode::Chamfer => {}
+                ToolMode::Dim
+                | ToolMode::DimLinear
+                | ToolMode::DimAligned
+                | ToolMode::DimAngular
+                | ToolMode::DimRadius
+                | ToolMode::DimDiameter
+                | ToolMode::QDim
+                | ToolMode::DimContinue
+                | ToolMode::DimBaseline
+                | ToolMode::MText
+                | ToolMode::MLeader => {}
                 ToolMode::Model => {
                     match self.model_id.as_deref().and_then(sketchcad_bim::find_model) {
                         Some(model) => {
@@ -1504,6 +3044,7 @@ impl Viewport2D {
                 }
             }
         }
+        self.render_text_editor(ui, doc, undo_stack, selected_id, status_msg);
         clicked_element
     }
 
@@ -2237,6 +3778,32 @@ pub fn pick_closest_element(doc: &BimDocument, world_pt: Point2D) -> Option<Elem
         }
     }
 
+    for elem in doc.get_elements_by_kind(sketchcad_bim::ElementKind::Annotation) {
+        if let Some(a) = doc.get_annotation(elem.id()) {
+            let dist = a.distance_to(world_pt).max(1.0);
+            if dist < min_dist {
+                min_dist = dist;
+                closest_id = Some(a.id);
+            }
+        }
+    }
+
+    // Drafting last: slabs claim any click inside them, line work right under the cursor wins
+    for kind in [sketchcad_bim::ElementKind::Draft, sketchcad_bim::ElementKind::Hatch] {
+        for elem in doc.get_elements_by_kind(kind) {
+            if let Some(d) = doc.get_draft(elem.id()) {
+                // Inside a hatch counts as "near" but loses to line work right under the cursor
+                let dist = match d.distance_to(world_pt) {
+                    0.0 => 250.0,
+                    dist => dist,
+                };
+                if dist < min_dist {
+                    min_dist = dist;
+                    closest_id = Some(d.id);
+                }
+            }
+        }
+    }
     closest_id
 }
 
@@ -2316,6 +3883,9 @@ fn line_stroke(style: LineStyle) -> Stroke {
         LineStyle::Fixture => Stroke::new(0.9, Color32::from_rgba_unmultiplied(225, 190, 110, 170)),
         LineStyle::Overhead => Stroke::new(0.9, Color32::from_rgba_unmultiplied(150, 152, 165, 150)),
         LineStyle::Boundary => Stroke::new(0.8, Color32::from_rgba_unmultiplied(80, 150, 220, 120)),
+        LineStyle::Draft => Stroke::new(1.4, Color32::from_rgb(245, 245, 250)),
+        LineStyle::Hatch => Stroke::new(0.7, Color32::from_rgba_unmultiplied(170, 185, 205, 190)),
+        LineStyle::Annotation => Stroke::new(1.0, ANNOTATION_COLOR),
     }
 }
 
@@ -2362,5 +3932,54 @@ mod tests {
         assert_eq!(vp.camera.zoom, MAX_ZOOM);
         vp.zoom_about(1e-12, Pos2::ZERO, Point2D::ZERO);
         assert_eq!(vp.camera.zoom, MIN_ZOOM);
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+    use sketchcad_bim::{DraftGeometry, Material};
+
+    #[test]
+    fn dimension_helpers_follow_autocad_conventions() {
+        use sketchcad_bim::DimAxis;
+        let (p1, p2) = (Point2D::new(0.0, 0.0), Point2D::new(3000.0, 1000.0));
+        assert_eq!(Viewport2D::auto_axis(p1, p2, Point2D::new(1500.0, 2500.0)), DimAxis::Horizontal, "dragged above: horizontal");
+        assert_eq!(Viewport2D::auto_axis(p1, p2, Point2D::new(4500.0, 500.0)), DimAxis::Vertical, "dragged beside: vertical");
+
+        // Two lines crossing at the origin; the cursor in the upper-right quadrant measures 90°
+        let (start, sweep) = angle_between_rays(Vector2D::X, Vector2D::Y, Vector2D::new(1.0, 1.0), true);
+        assert!((sweep - 90.0).abs() < 1e-9 && start.abs() < 1e-9);
+        // Lower-left quadrant: still 90°, between −X and −Y
+        let (start, sweep) = angle_between_rays(Vector2D::X, Vector2D::Y, Vector2D::new(-1.0, -1.0), true);
+        assert!((sweep - 90.0).abs() < 1e-9 && (start.rem_euclid(360.0) - 180.0).abs() < 1e-9);
+        // Vertex mode: the reflex side when the cursor is outside the 90° angle
+        let (_, sweep) = angle_between_rays(Vector2D::X, Vector2D::Y, Vector2D::new(-1.0, -1.0), false);
+        assert!((sweep - 270.0).abs() < 1e-9);
+
+        let mut doc = BimDocument::new("QDIM");
+        doc.insert_draft(sketchcad_bim::DraftGeometry::Line { start: Point2D::new(0.0, 0.0), end: Point2D::new(1000.0, 0.0) }, 0.0);
+        doc.insert_column(Point2D::new(2500.0, 0.0), 400.0, 400.0, 3000.0, Material::concrete());
+        doc.insert_column(Point2D::new(9000.0, 0.0), 400.0, 400.0, 3000.0, Material::concrete());
+        let pts = qdim_points(&doc, Point2D::new(-100.0, -100.0), Point2D::new(3000.0, 100.0));
+        assert_eq!(pts.len(), 3, "line ends and the column inside the window: {pts:?}");
+    }
+
+    #[test]
+    fn hatch_picks_the_innermost_closed_region() {
+        let mut doc = BimDocument::new("Hatch");
+        doc.insert_slab(Point2D::new(0.0, 0.0), 10_000.0, 8_000.0, 200.0, -200.0, Material::concrete());
+        doc.insert_draft(DraftGeometry::Circle { center: Point2D::new(3000.0, 3000.0), radius: 1000.0 }, 0.0);
+        // An open polyline is not a region
+        doc.insert_draft(DraftGeometry::Polyline { points: vec![Point2D::new(6000.0, 1000.0), Point2D::new(9000.0, 1000.0), Point2D::new(9000.0, 4000.0)], closed: false }, 0.0);
+
+        let in_circle = hatch_region_at(&doc, Point2D::new(3200.0, 3000.0)).unwrap();
+        assert_eq!(in_circle.len(), 64, "the circle, not the slab around it");
+        let in_slab = hatch_region_at(&doc, Point2D::new(8000.0, 2000.0)).unwrap();
+        assert_eq!(in_slab.len(), 4, "falls back to the slab outline");
+        assert!(hatch_region_at(&doc, Point2D::new(20_000.0, 0.0)).is_none());
+
+        let id = doc.insert_draft(DraftGeometry::Hatch { boundary: in_circle, pattern: sketchcad_bim::HatchPattern::Brick, spacing: 100.0, angle_deg: 0.0 }, 0.0);
+        assert_eq!(pick_closest_element(&doc, Point2D::new(3000.0, 3000.0)), Some(id), "clicking inside a hatch selects it");
     }
 }

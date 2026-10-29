@@ -8,7 +8,7 @@
 use sketchcad_bim::{BimDocument, ElementKind, IfcComponent};
 use sketchcad_core::{ElementId, Point2D, Point3D};
 use sketchcad_geom::TriangleMesh;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Gap (mm) below which element footprints are considered part of the same building cluster.
 pub const CLUSTER_MARGIN: f64 = 3000.0;
@@ -36,18 +36,27 @@ pub enum LineStyle {
     Overhead,
     /// Room / space boundaries
     Boundary,
+    /// 2D drafting line work (lines, arcs, splines …)
+    Draft,
+    /// Hatch fill pattern lines
+    Hatch,
+    /// Dimensions and leaders (註解)
+    Annotation,
 }
 
 impl LineStyle {
     fn draw_rank(self) -> u8 {
         match self {
             LineStyle::Boundary => 0,
+            LineStyle::Hatch => 0,
             LineStyle::Overhead => 1,
             LineStyle::Projection => 2,
             LineStyle::Fixture => 3,
             LineStyle::Furniture => 4,
             LineStyle::Symbol => 5,
             LineStyle::Cut => 6,
+            LineStyle::Draft => 7,
+            LineStyle::Annotation => 8,
         }
     }
 }
@@ -79,6 +88,20 @@ pub struct PlanSet {
     pub elem_ids: Vec<ElementId>,
     /// Common drawing extent of all sheets (outliers trimmed), used for framing and tiling
     pub extent: Option<(Point2D, Point2D)>,
+    /// Pen overrides of drafting entities (colour / line type), by element index
+    pub pens: HashMap<u32, Pen>,
+}
+
+/// How an element's plan lines are drawn when its own settings or its layer differ from
+/// the architectural line styles (ByLayer: the object's setting wins, then the layer's).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pen {
+    pub color: Option<[u8; 4]>,
+    pub linetype: Option<sketchcad_bim::LineType>,
+    /// Line width in screen pixels
+    pub width: Option<f32>,
+    /// Opacity from the layer transparency (1 = opaque)
+    pub alpha: f32,
 }
 
 impl PlanSet {
@@ -105,7 +128,12 @@ pub fn build_plan_set(doc: &BimDocument) -> PlanSet {
             continue;
         }
         let mesh = elem.to_3d_mesh();
-        let (min_z, max_z) = mesh.bbox().map_or((0.0, 0.0), |b| (b.min.z, b.max.z));
+        let level = doc.get_draft(elem.id()).map(|d| d.elevation).or_else(|| doc.get_annotation(elem.id()).map(|a| a.elevation));
+        let (min_z, max_z) = match level {
+            // Drafting and annotations have no 3D body: they belong to the level drawn on
+            Some(z) => (z, z),
+            None => mesh.bbox().map_or((0.0, 0.0), |b| (b.min.z, b.max.z)),
+        };
         let ifc = elem.as_any().downcast_ref::<IfcComponent>();
         items.push(Item {
             id: elem.id(),
@@ -207,7 +235,28 @@ pub fn build_plan_set(doc: &BimDocument) -> PlanSet {
     }
     let extent = robust_extent(&sheets, &elem_kinds);
 
-    PlanSet { sheets, elem_ids, extent }
+    // Pens: the object's own colour / line type, else its layer's (ByLayer)
+    let mut pens = HashMap::new();
+    for (i, id) in elem_ids.iter().enumerate() {
+        let layer = doc.layer_table().get(&doc.layer_of(*id)).cloned().unwrap_or_else(|| sketchcad_bim::Layer::new(""));
+        let (own_color, own_linetype) = match (doc.get_draft(*id), doc.get_annotation(*id)) {
+            (Some(d), _) => (d.color, (d.linetype != sketchcad_bim::LineType::Continuous).then_some(d.linetype)),
+            (_, Some(a)) => (a.color, None),
+            _ => (None, None),
+        };
+        let pen = Pen {
+            color: own_color.or(layer.color),
+            linetype: own_linetype.or(layer.linetype),
+            // 0.25 mm ≈ 1 px on screen, like AutoCAD's lineweight display
+            width: layer.lineweight.map(|mm| (mm / 0.25).clamp(0.5, 6.0)),
+            alpha: 1.0 - layer.transparency.min(90) as f32 / 100.0,
+        };
+        if pen.color.is_some() || pen.linetype.is_some() || pen.width.is_some() || pen.alpha < 1.0 {
+            pens.insert(i as u32, pen);
+        }
+    }
+
+    PlanSet { sheets, elem_ids, extent, pens }
 }
 
 /// Line style and the number of leading primitives used for native elements on a floor plan.
@@ -222,6 +271,9 @@ fn native_style(kind: ElementKind) -> (LineStyle, Option<usize>) {
         | ElementKind::Ramp
         | ElementKind::CurtainGrid => (LineStyle::Symbol, None),
         ElementKind::Furniture | ElementKind::Model => (LineStyle::Furniture, None),
+        ElementKind::Draft => (LineStyle::Draft, None),
+        ElementKind::Hatch => (LineStyle::Hatch, None),
+        ElementKind::Annotation => (LineStyle::Annotation, None),
         ElementKind::LightFixture | ElementKind::Outlet => (LineStyle::Fixture, None),
         ElementKind::Slab => (LineStyle::Projection, Some(1)),
         ElementKind::Space => (LineStyle::Boundary, Some(1)),

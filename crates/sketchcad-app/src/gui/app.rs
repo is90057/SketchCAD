@@ -1,4 +1,5 @@
 use crate::gui::inspector::{InspectorPanel, InspectorState};
+use crate::gui::layer_manager::{layer_swatch, LayerCommand, LayerUiState};
 use crate::gui::material_library::MaterialLibraryState;
 use crate::gui::model_browser::ModelBrowserState;
 use crate::gui::viewport_2d::{ToolMode, Viewport2D};
@@ -57,6 +58,34 @@ impl RibbonTab {
     fn of_tool(mode: ToolMode) -> Self {
         match mode {
             ToolMode::Select | ToolMode::Move | ToolMode::PushPull => Self::Home,
+            ToolMode::DraftLine
+            | ToolMode::DraftPolyline
+            | ToolMode::DraftCircle
+            | ToolMode::DraftArc
+            | ToolMode::DraftSpline
+            | ToolMode::DraftHatch => Self::Home,
+            ToolMode::Erase
+            | ToolMode::Copy
+            | ToolMode::Trim
+            | ToolMode::Extend
+            | ToolMode::Mirror
+            | ToolMode::Offset
+            | ToolMode::Array
+            | ToolMode::Rotate
+            | ToolMode::Scale
+            | ToolMode::Fillet
+            | ToolMode::Chamfer => Self::Home,
+            ToolMode::Dim
+            | ToolMode::DimLinear
+            | ToolMode::DimAligned
+            | ToolMode::DimAngular
+            | ToolMode::DimRadius
+            | ToolMode::DimDiameter
+            | ToolMode::QDim
+            | ToolMode::DimContinue
+            | ToolMode::DimBaseline
+            | ToolMode::MText
+            | ToolMode::MLeader => Self::Home,
             ToolMode::Wall
             | ToolMode::Column
             | ToolMode::Slab
@@ -77,6 +106,106 @@ impl RibbonTab {
 /// Toolbar entry: tool, title (with shortcut) and tooltip description.
 type ToolEntry = (ToolMode, &'static str, &'static str);
 
+/// Non-letter keys of the command line in one frame.
+#[derive(Default)]
+struct CommandKeys {
+    execute: bool,
+    cancel: bool,
+    backspace: bool,
+    delete: bool,
+    /// Ctrl+1
+    properties: bool,
+    /// Shift+W
+    window: bool,
+}
+
+/// Action of a command-line alias.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Tool(ToolMode),
+    Erase,
+    Snap,
+    Properties,
+    Layer(LayerCommand),
+}
+
+/// Command-line aliases (AutoCAD style). A command runs as soon as the typed letters name
+/// it unambiguously, otherwise on Enter / Space (e.g. C → Enter for Column, CO for Copy).
+const COMMANDS: &[(&str, Command)] = &[
+    // 修改
+    ("E", Command::Erase),
+    ("M", Command::Tool(ToolMode::Move)),
+    ("CO", Command::Tool(ToolMode::Copy)),
+    ("CP", Command::Tool(ToolMode::Copy)),
+    ("TR", Command::Tool(ToolMode::Trim)),
+    ("EX", Command::Tool(ToolMode::Extend)),
+    ("MI", Command::Tool(ToolMode::Mirror)),
+    ("O", Command::Tool(ToolMode::Offset)),
+    ("AR", Command::Tool(ToolMode::Array)),
+    ("RO", Command::Tool(ToolMode::Rotate)),
+    ("SC", Command::Tool(ToolMode::Scale)),
+    ("CHA", Command::Tool(ToolMode::Chamfer)),
+    ("F", Command::Tool(ToolMode::Fillet)),
+    ("PR", Command::Properties),
+    // 圖層
+    ("LA", Command::Layer(LayerCommand::Manager)),
+    ("LAYISO", Command::Layer(LayerCommand::Isolate)),
+    ("LAYUNISO", Command::Layer(LayerCommand::Unisolate)),
+    ("LAYWALK", Command::Layer(LayerCommand::Walk)),
+    ("LAYDEL", Command::Layer(LayerCommand::Delete)),
+    ("COPYTOLAYER", Command::Layer(LayerCommand::CopyToLayer)),
+    // 註解
+    ("DIM", Command::Tool(ToolMode::Dim)),
+    ("DIMLINEAR", Command::Tool(ToolMode::DimLinear)),
+    ("DLI", Command::Tool(ToolMode::DimLinear)),
+    ("DIMALIGNED", Command::Tool(ToolMode::DimAligned)),
+    ("DAL", Command::Tool(ToolMode::DimAligned)),
+    ("DIMANGULAR", Command::Tool(ToolMode::DimAngular)),
+    ("DAN", Command::Tool(ToolMode::DimAngular)),
+    ("DIMRADIUS", Command::Tool(ToolMode::DimRadius)),
+    ("DRA", Command::Tool(ToolMode::DimRadius)),
+    ("DIMDIAMETER", Command::Tool(ToolMode::DimDiameter)),
+    ("DDI", Command::Tool(ToolMode::DimDiameter)),
+    ("QDIM", Command::Tool(ToolMode::QDim)),
+    ("DIMCONTINUE", Command::Tool(ToolMode::DimContinue)),
+    ("DCO", Command::Tool(ToolMode::DimContinue)),
+    ("DIMBASELINE", Command::Tool(ToolMode::DimBaseline)),
+    ("DBA", Command::Tool(ToolMode::DimBaseline)),
+    ("MTEXT", Command::Tool(ToolMode::MText)),
+    ("MT", Command::Tool(ToolMode::MText)),
+    ("MLEADER", Command::Tool(ToolMode::MLeader)),
+    ("MLD", Command::Tool(ToolMode::MLeader)),
+    // 繪製
+    ("L", Command::Tool(ToolMode::DraftLine)),
+    ("PL", Command::Tool(ToolMode::DraftPolyline)),
+    ("CI", Command::Tool(ToolMode::DraftCircle)),
+    ("A", Command::Tool(ToolMode::DraftArc)),
+    ("SPL", Command::Tool(ToolMode::DraftSpline)),
+    ("H", Command::Tool(ToolMode::DraftHatch)),
+    // 建築 / 室內 / 其他
+    ("S", Command::Tool(ToolMode::Select)),
+    ("W", Command::Tool(ToolMode::Wall)),
+    ("D", Command::Tool(ToolMode::Door)),
+    ("C", Command::Tool(ToolMode::Column)),
+    ("SL", Command::Tool(ToolMode::Slab)),
+    ("T", Command::Tool(ToolMode::Ceiling)),
+    ("R", Command::Tool(ToolMode::Stairs)),
+    ("P", Command::Tool(ToolMode::PushPull)),
+    ("K", Command::Tool(ToolMode::Paint)),
+    ("B", Command::Tool(ToolMode::Model)),
+    ("G", Command::Snap),
+];
+
+/// Letter keys fed to the command line.
+const LETTER_KEYS: [(egui::Key, char); 26] = [
+    (egui::Key::A, 'A'), (egui::Key::B, 'B'), (egui::Key::C, 'C'), (egui::Key::D, 'D'), (egui::Key::E, 'E'),
+    (egui::Key::F, 'F'), (egui::Key::G, 'G'), (egui::Key::H, 'H'), (egui::Key::I, 'I'), (egui::Key::J, 'J'),
+    (egui::Key::K, 'K'), (egui::Key::L, 'L'), (egui::Key::M, 'M'), (egui::Key::N, 'N'), (egui::Key::O, 'O'),
+    (egui::Key::P, 'P'), (egui::Key::Q, 'Q'), (egui::Key::R, 'R'), (egui::Key::S, 'S'), (egui::Key::T, 'T'),
+    (egui::Key::U, 'U'), (egui::Key::V, 'V'), (egui::Key::W, 'W'), (egui::Key::X, 'X'), (egui::Key::Y, 'Y'),
+    (egui::Key::Z, 'Z'),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     Ifc,
@@ -93,6 +222,10 @@ pub struct SketchCadApp {
     pub layout: ViewLayout,
     pub tool_mode: ToolMode,
     pub ribbon_tab: RibbonTab,
+    /// Letters typed on the command line (e.g. "TR" before Enter)
+    pub command_buffer: String,
+    /// Layer manager / LAYWALK / LAYDEL / COPYTOLAYER windows
+    pub layer_ui: LayerUiState,
     /// Tool of the previous frame, to follow tool changes with the ribbon tab
     ribbon_last_tool: ToolMode,
     pub selected_id: Option<ElementId>,
@@ -146,6 +279,8 @@ impl SketchCadApp {
             layout: ViewLayout::Split2D3D,
             tool_mode: ToolMode::Select,
             ribbon_tab: RibbonTab::Home,
+            command_buffer: String::new(),
+            layer_ui: LayerUiState::default(),
             ribbon_last_tool: ToolMode::Select,
             selected_id: None,
             status_text: "就緒 (Ready) | BIM 參數化核心已連動".to_string(),
@@ -421,6 +556,114 @@ impl SketchCadApp {
         self.show_notify(format!("🎨 已將「{}」貼附至 {}", self.paint_material.name, elem_name));
     }
 
+    /// Switches tool, dropping any half-finished input of the previous one.
+    fn set_tool(&mut self, mode: ToolMode) {
+        self.tool_mode = mode;
+        let vp = &mut self.viewport_2d;
+        vp.draft_points.clear();
+        vp.wall_start_pt = None;
+        vp.slab_start_pt = None;
+        vp.ceiling_start_pt = None;
+        vp.stair_start_pt = None;
+        vp.railing_start_pt = None;
+        vp.roof_start_pt = None;
+        vp.ramp_start_pt = None;
+        vp.curtain_wall_start_pt = None;
+        vp.space_start_pt = None;
+        vp.move_base_pt = None;
+    }
+
+    /// AutoCAD-style command line: typed letters collect in a buffer that runs as soon as it
+    /// names exactly one command, or on Enter / Space. Esc cancels everything.
+    fn handle_command_keys(&mut self, ctx: &egui::Context, typed: Vec<char>, keys: CommandKeys) {
+        if keys.cancel {
+            self.command_buffer.clear();
+            self.set_tool(ToolMode::Select);
+            self.viewport_3d.snap_element = None;
+            return;
+        }
+        if keys.properties {
+            self.run_command(Command::Properties);
+        }
+        if keys.window {
+            self.set_tool(ToolMode::Window);
+        }
+        if keys.backspace && !self.command_buffer.is_empty() {
+            self.command_buffer.pop();
+        } else if (keys.backspace || keys.delete) && self.selected_id.is_some() {
+            self.run_command(Command::Erase);
+        }
+        for letter in typed {
+            // While placing furniture / models, R turns the piece (handled by the viewports)
+            if letter == 'R' && self.command_buffer.is_empty() && matches!(self.tool_mode, ToolMode::Furniture | ToolMode::Model) {
+                if self.layout == ViewLayout::Orbit3DOnly && self.tool_mode == ToolMode::Model {
+                    self.viewport_2d.furniture_rotation = (self.viewport_2d.furniture_rotation + std::f64::consts::FRAC_PI_2) % std::f64::consts::TAU;
+                }
+                continue;
+            }
+            self.command_buffer.push(letter);
+            let candidates: Vec<&(&str, Command)> = COMMANDS.iter().filter(|(alias, _)| alias.starts_with(self.command_buffer.as_str())).collect();
+            match candidates.as_slice() {
+                [] => {
+                    self.show_notify(format!("未知指令: {}", self.command_buffer));
+                    self.command_buffer.clear();
+                }
+                [(alias, command)] if *alias == self.command_buffer => {
+                    let command = *command;
+                    self.command_buffer.clear();
+                    self.run_command(command);
+                }
+                _ => {}
+            }
+        }
+        if keys.execute && !self.command_buffer.is_empty() {
+            // Enter / Space belong to the command line, not to the drawing tools this frame
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+            });
+            let buffer = std::mem::take(&mut self.command_buffer);
+            match COMMANDS.iter().find(|(alias, _)| *alias == buffer) {
+                Some((_, command)) => self.run_command(*command),
+                None => self.show_notify(format!("未知指令: {buffer}")),
+            }
+        }
+    }
+
+    fn run_command(&mut self, command: Command) {
+        match command {
+            Command::Tool(mode) => self.set_tool(mode),
+            Command::Erase => match self.selected_id.take() {
+                // Noun-verb: an existing selection is deleted at once
+                Some(id) => {
+                    self.save_undo_state();
+                    let name = self.doc.get_element(id).map(|e| e.name().to_string()).unwrap_or_default();
+                    self.doc.remove_element(id);
+                    self.show_notify(format!("已刪除 {name}"));
+                }
+                None => self.set_tool(ToolMode::Erase),
+            },
+            Command::Snap => match self.selected_id.filter(|id| self.doc.placement(*id).is_some()) {
+                // 吸附: the next click on a surface in the 3D view snaps the selection to it
+                Some(id) => {
+                    self.viewport_3d.snap_element = Some(id);
+                    if self.layout == ViewLayout::Drafting2DOnly {
+                        self.layout = ViewLayout::Split2D3D;
+                    }
+                }
+                None => self.show_notify("吸附 [G]：請先選取一個百寶箱模型或家具"),
+            },
+            Command::Layer(command) => self.layer_command(command),
+            Command::Properties => {
+                self.show_inspector = true;
+                self.inspector_state.active_tab = crate::gui::inspector::InspectorTab::PropertyGrid;
+                if self.selected_id.is_none() {
+                    self.show_notify("性質 [PR / Ctrl+1]：選取物件後即可在右側修改圖層、顏色、線型與座標");
+                }
+            }
+        }
+    }
+
     /// Ribbon toolbar (工具列分頁): undo / redo and the tab strip on the first row, the
     /// active tab's tool groups on the second. Switching tools by shortcut follows the tab.
     fn render_ribbon(&mut self, ui: &mut egui::Ui) {
@@ -461,6 +704,8 @@ impl SketchCadApp {
         egui::ScrollArea::horizontal().id_salt("ribbon_scroll").auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.set_min_height(56.0);
+                // Never wrap labels inside the ribbon: overflowing groups scroll instead
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 match self.ribbon_tab {
                     RibbonTab::Home => self.ribbon_home(ui),
                     RibbonTab::Build => self.ribbon_build(ui),
@@ -476,19 +721,19 @@ impl SketchCadApp {
     fn tool_buttons(&mut self, ui: &mut egui::Ui, tools: &[ToolEntry]) {
         for &(mode, title, desc) in tools {
             if tool_icon_button(ui, mode, self.tool_mode, title, desc) {
-                self.tool_mode = mode;
-                self.viewport_2d.wall_start_pt = None;
-                self.viewport_2d.slab_start_pt = None;
-                self.viewport_2d.ceiling_start_pt = None;
-                self.viewport_2d.stair_start_pt = None;
-                self.viewport_2d.railing_start_pt = None;
-                self.viewport_2d.roof_start_pt = None;
-                self.viewport_2d.ramp_start_pt = None;
-                self.viewport_2d.curtain_wall_start_pt = None;
-                self.viewport_2d.space_start_pt = None;
-                self.viewport_2d.move_base_pt = None;
+                self.set_tool(mode);
             }
         }
+    }
+
+    /// Tool icons laid out in rows of `per_row` (keeps wide groups compact).
+    fn tool_button_rows(&mut self, ui: &mut egui::Ui, tools: &[ToolEntry], per_row: usize) {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            for row in tools.chunks(per_row) {
+                ui.horizontal(|ui| self.tool_buttons(ui, row));
+            }
+        });
     }
 
     fn ribbon_home(&mut self, ui: &mut egui::Ui) {
@@ -499,26 +744,223 @@ impl SketchCadApp {
                 (ToolMode::PushPull, "幾何推拉 (Push-Pull) [P]", "選擇任意 3D 封閉平面，沿其法向量方向進行互動拉伸建模"),
             ]);
         });
-        ribbon_group(ui, "剪貼簿", |ui| {
-            let has_sel = self.selected_id.is_some();
-            if ui.add_enabled(has_sel, egui::Button::new("✂ 剪下")).on_hover_text("剪下選定構件 [Ctrl+X]").clicked() {
-                self.cut();
-            }
-            if ui.add_enabled(has_sel, egui::Button::new("📋 複製")).on_hover_text("複製選定構件 [Ctrl+C]").clicked() {
-                self.copy();
-            }
-            if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("📄 貼上")).on_hover_text("貼上剪貼簿中的構件 [Ctrl+V]").clicked() {
-                self.paste();
-            }
-            let delete = egui::Button::new(egui::RichText::new("🗑 刪除").color(egui::Color32::from_rgb(255, 120, 120)));
-            if ui.add_enabled(has_sel, delete).on_hover_text("刪除目前選定的構件 [Delete / Backspace]").clicked() {
-                if let Some(id) = self.selected_id.take() {
-                    self.save_undo_state();
-                    self.doc.remove_element(id);
-                    self.show_notify("已刪除選定構件");
-                }
-            }
+        ribbon_group(ui, "繪製", |ui| {
+            self.tool_buttons(ui, &[
+                (ToolMode::DraftLine, "直線 (Line) [L]", "點選起點與下一點繪製直線，可連續繪製；Enter、右鍵或雙擊結束"),
+                (ToolMode::DraftPolyline, "聚合線 (Polyline)", "依序點選頂點繪製相連的折線；點回起點即封閉，Enter、右鍵或雙擊完成"),
+                (ToolMode::DraftCircle, "圓 (Circle)", "點選圓心，再點選半徑點"),
+                (ToolMode::DraftArc, "弧 (Arc)", "三點畫弧：起點 → 弧上任一點 → 終點"),
+                (ToolMode::DraftSpline, "多段線 / 雲形線 (Spline)", "依序點選通過點，繪製平滑曲線 (常用於描圖)；Enter、右鍵或雙擊完成"),
+                (ToolMode::DraftHatch, "填充線 (Hatch) [H]", "點擊封閉的聚合線、圓、空間或樓板內部即填充；或點選頂點自訂填充邊界"),
+            ]);
+            ui.vertical(|ui| {
+                let vp = &mut self.viewport_2d;
+                egui::ComboBox::from_id_salt("hatch_pattern")
+                    .width(118.0)
+                    .selected_text(vp.hatch_pattern.label())
+                    .show_ui(ui, |ui| {
+                        for p in sketchcad_bim::HatchPattern::ALL {
+                            ui.selectable_value(&mut vp.hatch_pattern, p, p.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("填充圖樣 (新繪製的填充線；已繪製的可於屬性面板修改)");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut vp.hatch_spacing).speed(5.0).range(10.0..=5000.0).prefix("間距 ").suffix("mm"))
+                        .on_hover_text("填充線間距");
+                    ui.add(egui::DragValue::new(&mut vp.hatch_angle).speed(1.0).range(-180.0..=180.0).suffix("°"))
+                        .on_hover_text("填充線旋轉角度");
+                });
+            });
         });
+        ribbon_group(ui, "修改", |ui| {
+            self.tool_button_rows(ui, &[
+                (ToolMode::Erase, "刪除 (Erase) [E]", "刪除選取的物件；未選取時進入點選刪除模式"),
+                (ToolMode::Move, "搬移 (Move) [M]", "將物件從一個位置移動到另一個位置 (基準點 → 目標點)"),
+                (ToolMode::Copy, "複製 (Copy) [CO / CP]", "複製物件並可連續放置多個複本"),
+                (ToolMode::Trim, "修剪 (Trim) [TR]", "以其他線條、牆與柱為邊界，剪掉多餘的線段"),
+                (ToolMode::Extend, "延伸 (Extend) [EX]", "將線段延伸到最近的邊界"),
+                (ToolMode::Mirror, "鏡射 (Mirror) [MI]", "以兩點定義的對稱軸鏡射複製物件"),
+                (ToolMode::Offset, "偏移 (Offset) [O]", "將線條或曲線依指定距離平行複製"),
+                (ToolMode::Array, "陣列 (Array) [AR]", "將物件做矩形、環形或路徑陣列"),
+                (ToolMode::Rotate, "旋轉 (Rotate) [RO]", "依指定基點旋轉物件角度 (Shift 以 15° 為單位)"),
+                (ToolMode::Scale, "比例縮放 (Scale) [SC]", "依基點放大或縮小物件"),
+                (ToolMode::Fillet, "圓角 (Fillet) [F]", "以指定半徑將兩條直線或聚合線轉角接成圓弧 (半徑 0 = 直角接合)"),
+                (ToolMode::Chamfer, "導角 (Chamfer) [CHA]", "以指定距離切出斜角"),
+            ], 6);
+            ui.vertical(|ui| {
+                if ui
+                    .button("📋 性質")
+                    .on_hover_text("性質修改 (Properties) [PR / Ctrl+1]：打開性質面板，修改圖層、顏色、線型、座標等參數")
+                    .clicked()
+                {
+                    self.run_command(Command::Properties);
+                }
+                self.modify_settings_ui(ui);
+            });
+        });
+        ribbon_group(ui, "註解", |ui| {
+            self.tool_button_rows(ui, &[
+                (ToolMode::Dim, "智慧型標註 (DIM)", "游標移到物件上自動判斷：直線 → 線性 / 對齊標註，圓 → 直徑，弧 → 半徑；點一下即可標註"),
+                (ToolMode::DimLinear, "線性標註 (DIMLINEAR / DLI)", "標註水平或垂直距離"),
+                (ToolMode::DimAligned, "對齊式標註 (DIMALIGNED / DAL)", "標註斜邊的實際長度，標註線與斜邊平行"),
+                (ToolMode::DimAngular, "角度標註 (DIMANGULAR / DAN)", "測量兩條直線的夾角或弧的圓心角"),
+                (ToolMode::DimRadius, "半徑標註 (DIMRADIUS / DRA)", "標註圓或弧的半徑 (R)"),
+                (ToolMode::DimDiameter, "直徑標註 (DIMDIAMETER / DDI)", "標註圓或弧的直徑 (Ø)"),
+                (ToolMode::QDim, "快速標註 (QDIM)", "框選一群物件，一次建立連續式、基線式或交錯式標註"),
+                (ToolMode::DimContinue, "連續式標註 (DIMCONTINUE / DCO)", "從前一個標註的終點接續標註一整串尺寸"),
+                (ToolMode::DimBaseline, "基線式標註 (DIMBASELINE / DBA)", "多個尺寸共用同一條起始延伸線，往外依序排列"),
+                (ToolMode::MText, "多行文字 (MTEXT / MT)", "建立一般的多行說明文字"),
+                (ToolMode::MLeader, "多重引線 (MLEADER / MLD)", "建立帶箭頭與說明文字的圖說標示"),
+            ], 6);
+            ui.vertical(|ui| {
+                let a = &mut self.viewport_2d.annotate;
+                ui.add(egui::DragValue::new(&mut a.text_height).speed(5.0).range(10.0..=5000.0).prefix("字高 ").suffix(" mm"))
+                    .on_hover_text("新標註與文字的字高 (250 mm 於 1:100 出圖為 2.5 mm)");
+                match self.tool_mode {
+                    ToolMode::QDim => {
+                        egui::ComboBox::from_id_salt("qdim_mode").width(80.0).selected_text(a.qdim_mode.label()).show_ui(ui, |ui| {
+                            for m in crate::gui::viewport_2d::QDimMode::ALL {
+                                ui.selectable_value(&mut a.qdim_mode, m, m.label());
+                            }
+                        });
+                    }
+                    ToolMode::DimBaseline => {
+                        ui.add(egui::DragValue::new(&mut a.stack_spacing).speed(5.0).range(50.0..=10_000.0).prefix("間距 ").suffix(" mm"))
+                            .on_hover_text("基線 / 交錯標註線之間的距離");
+                    }
+                    _ => {}
+                }
+            });
+        });
+        ribbon_group(ui, "圖層", |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                // Current layer: new drafting / annotations go here
+                let current = self.doc.current_layer().to_string();
+                let mut chosen: Option<String> = None;
+                let mut toggle: Option<String> = None;
+                ui.horizontal(|ui| {
+                    if let Some(layer) = self.doc.layer_table().get(&current) {
+                        layer_swatch(ui, layer);
+                    }
+                    egui::ComboBox::from_id_salt("current_layer")
+                        .width(118.0)
+                        .selected_text(&current)
+                        .show_ui(ui, |ui| {
+                            for layer in self.doc.layers() {
+                                ui.horizontal(|ui| {
+                                    if ui.small_button(if layer.visible { "👁" } else { "⊘" }).on_hover_text("開 / 關圖層").clicked() {
+                                        toggle = Some(layer.name.clone());
+                                    }
+                                    layer_swatch(ui, layer);
+                                    if ui.selectable_label(layer.name == current, &layer.name).clicked() {
+                                        chosen = Some(layer.name.clone());
+                                    }
+                                });
+                            }
+                        })
+                        .response
+                        .on_hover_text("目前圖層：新繪製的線條、填充與註解會放在此圖層");
+                });
+                if let Some(name) = chosen {
+                    self.doc.set_current_layer(&name);
+                }
+                if let Some(name) = toggle {
+                    self.save_undo_state();
+                    if let Some(layer) = self.doc.layer_mut(&name) {
+                        layer.visible = !layer.visible;
+                    }
+                }
+                let buttons: [[(&str, &str, LayerCommand); 3]; 2] = [
+                    [
+                        ("📁 管理", "圖層性質管理員 (LA)：新增、刪除、更名圖層，設定顏色、線型、線粗與透明度", LayerCommand::Manager),
+                        ("隔離", "隔離圖層 (LAYISO)：只顯示選取物件所在的圖層", LayerCommand::Isolate),
+                        ("取消隔離", "取消圖層隔離 (LAYUNISO)：恢復先前隱藏的圖層", LayerCommand::Unisolate),
+                    ],
+                    [
+                        ("瀏覽", "瀏覽圖層 (LAYWALK)：點擊圖層名稱即時預覽該圖層的物件", LayerCommand::Walk),
+                        ("刪除", "刪除圖層 (LAYDEL)：連同圖層內的物件一併刪除", LayerCommand::Delete),
+                        ("複製到…", "複製到圖層 (COPYTOLAYER)：將物件複製到指定圖層", LayerCommand::CopyToLayer),
+                    ],
+                ];
+                for row in buttons {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        for (label, hint, command) in row {
+                            if ui.add(egui::Button::new(egui::RichText::new(label).small())).on_hover_text(hint).clicked() {
+                                self.layer_command(command);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        ribbon_group(ui, "剪貼簿", |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let has_sel = self.selected_id.is_some();
+                if ui.add_enabled(has_sel, egui::Button::new("✂").small()).on_hover_text("剪下選定構件 [Ctrl+X]").clicked() {
+                    self.cut();
+                }
+                if ui.add_enabled(has_sel, egui::Button::new("🗐").small()).on_hover_text("複製選定構件到剪貼簿 [Ctrl+C]").clicked() {
+                    self.copy();
+                }
+                if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("📄").small()).on_hover_text("貼上剪貼簿中的構件 [Ctrl+V]").clicked() {
+                    self.paste();
+                }
+            });
+        });
+    }
+
+    /// Settings of the active 修改 tool (distance, radius, factor, array layout …).
+    fn modify_settings_ui(&mut self, ui: &mut egui::Ui) {
+        use crate::gui::viewport_2d::ArrayMode;
+        let m = &mut self.viewport_2d.modify;
+        let drag = |ui: &mut egui::Ui, value: &mut f64, prefix: &str, range: std::ops::RangeInclusive<f64>| {
+            ui.add(egui::DragValue::new(value).speed(5.0).range(range).prefix(prefix).suffix(" mm"));
+        };
+        match self.tool_mode {
+            ToolMode::Offset => drag(ui, &mut m.offset_distance, "距離 ", 1.0..=100_000.0),
+            ToolMode::Fillet => drag(ui, &mut m.fillet_radius, "半徑 ", 0.0..=100_000.0),
+            ToolMode::Chamfer => {
+                ui.vertical(|ui| {
+                    drag(ui, &mut m.chamfer_d1, "距離1 ", 0.0..=100_000.0);
+                    drag(ui, &mut m.chamfer_d2, "距離2 ", 0.0..=100_000.0);
+                });
+            }
+            ToolMode::Scale => {
+                ui.add(egui::DragValue::new(&mut m.scale_factor).speed(0.01).range(0.01..=100.0).prefix("倍數 ").suffix("×"));
+            }
+            ToolMode::Mirror => {
+                ui.checkbox(&mut m.mirror_erase_source, "刪除原物件");
+            }
+            ToolMode::Array => {
+                ui.vertical(|ui| {
+                    egui::ComboBox::from_id_salt("array_mode").width(90.0).selected_text(m.array_mode.label()).show_ui(ui, |ui| {
+                        for mode in ArrayMode::ALL {
+                            ui.selectable_value(&mut m.array_mode, mode, mode.label());
+                        }
+                    });
+                    ui.horizontal(|ui| match m.array_mode {
+                        ArrayMode::Rectangular => {
+                            ui.add(egui::DragValue::new(&mut m.array_rows).range(1..=50).prefix("列 "));
+                            ui.add(egui::DragValue::new(&mut m.array_cols).range(1..=50).prefix("欄 "));
+                            drag(ui, &mut m.array_row_spacing, "列距 ", -100_000.0..=100_000.0);
+                            drag(ui, &mut m.array_col_spacing, "欄距 ", -100_000.0..=100_000.0);
+                        }
+                        ArrayMode::Polar => {
+                            ui.add(egui::DragValue::new(&mut m.array_count).range(2..=360).prefix("數量 "));
+                            ui.add(egui::DragValue::new(&mut m.array_angle).speed(1.0).range(-360.0..=360.0).prefix("角度 ").suffix("°"));
+                        }
+                        ArrayMode::Path => {
+                            ui.add(egui::DragValue::new(&mut m.array_count).range(1..=500).prefix("數量 "));
+                        }
+                    });
+                });
+            }
+            _ => {}
+        }
     }
 
     fn ribbon_build(&mut self, ui: &mut egui::Ui) {
@@ -1374,6 +1816,8 @@ impl eframe::App for SketchCadApp {
 
         // Keyboard Shortcuts for CAD Tools
         if !ctx.wants_keyboard_input() {
+            let mut typed: Vec<char> = Vec::new();
+            let mut keys = CommandKeys::default();
             ctx.input(|i| {
                 if i.modifiers.command || i.modifiers.ctrl {
                     if i.key_pressed(egui::Key::Z) && !i.modifiers.shift {
@@ -1396,72 +1840,26 @@ impl eframe::App for SketchCadApp {
                         do_export = true;
                     } else if i.key_pressed(egui::Key::N) {
                         do_new = true;
+                    } else if i.key_pressed(egui::Key::Num1) {
+                        keys.properties = true;
                     }
-                } else if i.key_pressed(egui::Key::Escape) || (!i.modifiers.command && !i.modifiers.ctrl && i.key_pressed(egui::Key::S)) {
-                    self.tool_mode = ToolMode::Select;
-                    self.viewport_3d.snap_element = None;
-                    self.viewport_2d.wall_start_pt = None;
-                    self.viewport_2d.slab_start_pt = None;
-                    self.viewport_2d.ceiling_start_pt = None;
-                    self.viewport_2d.stair_start_pt = None;
-                    self.viewport_2d.railing_start_pt = None;
-                    self.viewport_2d.roof_start_pt = None;
-                    self.viewport_2d.ramp_start_pt = None;
-                    self.viewport_2d.curtain_wall_start_pt = None;
-                    self.viewport_2d.move_base_pt = None;
-                } else if i.key_pressed(egui::Key::M) {
-                    self.tool_mode = ToolMode::Move;
-                    self.viewport_2d.move_base_pt = None;
-                } else if (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-                    && self.selected_id.is_some()
-                {
-                    if let Some(id) = self.selected_id {
-                        self.save_undo_state();
-                        self.doc.remove_element(id);
-                        self.selected_id = None;
-                        self.show_notify("已刪除選定構件");
-                    }
-                } else if i.key_pressed(egui::Key::W) && !i.modifiers.shift {
-                    self.tool_mode = ToolMode::Wall;
-                    self.viewport_2d.wall_start_pt = None;
-                } else if i.key_pressed(egui::Key::W) && i.modifiers.shift {
-                    self.tool_mode = ToolMode::Window;
-                } else if i.key_pressed(egui::Key::D) {
-                    self.tool_mode = ToolMode::Door;
-                } else if i.key_pressed(egui::Key::C) {
-                    self.tool_mode = ToolMode::Column;
-                } else if i.key_pressed(egui::Key::F) {
-                    self.tool_mode = ToolMode::Slab;
-                    self.viewport_2d.slab_start_pt = None;
-                } else if i.key_pressed(egui::Key::T) {
-                    self.tool_mode = ToolMode::Ceiling;
-                    self.viewport_2d.ceiling_start_pt = None;
-                } else if i.key_pressed(egui::Key::R) && self.tool_mode == ToolMode::Model && self.layout == ViewLayout::Orbit3DOnly {
-                    // The 2D view (which normally turns the piece) is hidden: rotate here
-                    self.viewport_2d.furniture_rotation = (self.viewport_2d.furniture_rotation + std::f64::consts::FRAC_PI_2) % std::f64::consts::TAU;
-                } else if i.key_pressed(egui::Key::R) && !matches!(self.tool_mode, ToolMode::Furniture | ToolMode::Model) {
-                    // In the Furniture and Model tools R rotates the piece being placed instead
-                    self.tool_mode = ToolMode::Stairs;
-                    self.viewport_2d.stair_start_pt = None;
-                } else if i.key_pressed(egui::Key::P) {
-                    self.tool_mode = ToolMode::PushPull;
-                } else if i.key_pressed(egui::Key::K) {
-                    self.tool_mode = ToolMode::Paint;
-                } else if i.key_pressed(egui::Key::B) {
-                    self.tool_mode = ToolMode::Model;
-                } else if i.key_pressed(egui::Key::G) {
-                    // 吸附: the next click on a surface in the 3D view snaps the selection to it
-                    match self.selected_id.filter(|id| self.doc.placement(*id).is_some()) {
-                        Some(id) => {
-                            self.viewport_3d.snap_element = Some(id);
-                            if self.layout == ViewLayout::Drafting2DOnly {
-                                self.layout = ViewLayout::Split2D3D;
-                            }
+                    return;
+                }
+                keys.cancel = i.key_pressed(egui::Key::Escape);
+                keys.execute = i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space);
+                keys.backspace = i.key_pressed(egui::Key::Backspace);
+                keys.delete = i.key_pressed(egui::Key::Delete);
+                if i.modifiers.shift && i.key_pressed(egui::Key::W) {
+                    keys.window = true;
+                } else if !i.modifiers.alt {
+                    for (key, letter) in LETTER_KEYS {
+                        if i.key_pressed(key) {
+                            typed.push(letter);
                         }
-                        None => self.show_notify("吸附 [G]：請先選取一個百寶箱模型或家具"),
                     }
                 }
             });
+            self.handle_command_keys(ctx, typed, keys);
         }
 
         if do_undo { self.undo(); }
@@ -1709,11 +2107,46 @@ impl eframe::App for SketchCadApp {
                     ToolMode::Furniture => "_FURNITURE [在平面圖點擊以放置家具，按 R 鍵可旋轉 90° 方向]",
                     ToolMode::LightFixture => "_LIGHT [在平面圖點擊天花板位置以安裝照明燈具]",
                     ToolMode::Paint => "_PAINT [點擊 2D / 3D 視口中的構件貼附目前材質；Alt + 點擊吸取材質]",
+                    ToolMode::Dim => "_DIM [游標移到線 / 圓 / 弧上預覽並點擊標註，或點選兩點；再點選標註位置]",
+                    ToolMode::DimLinear => "_DIMLINEAR [點選兩點 → 點選標註線位置 (上下拉 = 水平，左右拉 = 垂直)]",
+                    ToolMode::DimAligned => "_DIMALIGNED [點選斜邊兩端 → 點選標註線位置 (與斜邊平行)]",
+                    ToolMode::DimAngular => "_DIMANGULAR [點選兩條直線或一個弧，或點選頂點與兩端點 → 點選標註弧位置]",
+                    ToolMode::DimRadius => "_DIMRADIUS [點選圓或弧 → 點選標註方向]",
+                    ToolMode::DimDiameter => "_DIMDIAMETER [點選圓或弧 → 點選標註方向]",
+                    ToolMode::QDim => "_QDIM [點選兩角框選物件 → 點選標註線位置 (連續 / 基線 / 交錯於工具列設定)]",
+                    ToolMode::DimContinue => "_DIMCONTINUE [從前一個 (或選取的) 線性標註接續，連續點選下一點；Enter 結束]",
+                    ToolMode::DimBaseline => "_DIMBASELINE [以前一個 (或選取的) 線性標註起點為基線，連續點選下一點；Enter 結束]",
+                    ToolMode::MText => "_MTEXT [點選文字位置，輸入多行文字後按確定 (Ctrl+Enter)]",
+                    ToolMode::MLeader => "_MLEADER [點選箭頭位置 → 點選文字位置 → 輸入說明文字]",
+                    ToolMode::Erase => "_ERASE [點選要刪除的物件]",
+                    ToolMode::Copy => "_COPY [選取物件 → 點選基準點 → 連續點擊放置複本；Enter / 右鍵結束]",
+                    ToolMode::Trim => "_TRIM [點選線條要剪掉的部分 (以其他線條、牆、柱為邊界)]",
+                    ToolMode::Extend => "_EXTEND [點選線條靠近要延伸的那一端，延伸至最近的邊界]",
+                    ToolMode::Mirror => "_MIRROR [選取物件 → 點選鏡射軸兩點]",
+                    ToolMode::Offset => "_OFFSET [點選線條 → 點選偏移的一側 (距離於工具列設定)]",
+                    ToolMode::Array => "_ARRAY [選取物件 → 矩形：點擊建立 / 環形：點選中心 / 路徑：點選路徑線]",
+                    ToolMode::Rotate => "_ROTATE [選取物件 → 點選基準點 → 點選角度 (Shift = 15°)]",
+                    ToolMode::Scale => "_SCALE [選取物件 → 點選縮放基準點 (倍數於工具列設定)]",
+                    ToolMode::Fillet => "_FILLET [點選兩條直線，或聚合線的轉角 (半徑於工具列設定，0 = 直角接合)]",
+                    ToolMode::Chamfer => "_CHAMFER [點選兩條直線，或聚合線的轉角 (距離於工具列設定)]",
+                    ToolMode::DraftLine => "_LINE [點選起點與下一點，連續繪製直線；Enter / 右鍵 / 雙擊 結束]",
+                    ToolMode::DraftPolyline => "_PLINE [依序點選頂點繪製聚合線；點回起點封閉，Enter / 右鍵 / 雙擊 完成]",
+                    ToolMode::DraftCircle => "_CIRCLE [點選圓心，再點選半徑點]",
+                    ToolMode::DraftArc => "_ARC [三點畫弧：起點 → 弧上一點 → 終點]",
+                    ToolMode::DraftSpline => "_SPLINE [依序點選通過點繪製平滑曲線 (描圖)；Enter / 右鍵 / 雙擊 完成]",
+                    ToolMode::DraftHatch => "_HATCH [點擊封閉區域內部填充，或點選頂點自訂邊界；圖樣、間距與角度於工具列設定]",
                     ToolMode::Model => "_MODEL [從模型百寶箱選擇模型後在 2D 平面或 3D 視圖點擊放置 (3D 點牆面自動靠牆)，按 R 鍵旋轉 90°]",
                     ToolMode::Outlet => "_OUTLET [移動至牆體旁點擊，於滑鼠所在側牆面安裝電源插座]",
                 };
 
-                ui.label(cmd_prompt);
+                if self.command_buffer.is_empty() {
+                    ui.label(cmd_prompt);
+                } else {
+                    // Letters typed so far, with the commands they can still become
+                    let options: Vec<&str> = COMMANDS.iter().map(|(a, _)| *a).filter(|a| a.starts_with(self.command_buffer.as_str())).collect();
+                    ui.label(egui::RichText::new(format!("{}_", self.command_buffer)).strong().monospace().color(egui::Color32::from_rgb(120, 220, 255)));
+                    ui.label(egui::RichText::new(format!("(Enter / 空白鍵 執行 · 可能指令: {})", options.join(" "))).small().weak());
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label("單位: 公釐 (mm) / 坪");
@@ -1911,6 +2344,7 @@ impl eframe::App for SketchCadApp {
         if self.tool_mode == ToolMode::Model || self.model_browser.open {
             self.render_model_browser(ctx);
         }
+        self.render_layer_windows(ctx);
 
         // 6. File Dialog Modals (Open, Export, Save As)
         self.render_file_modals(ctx);
@@ -2470,6 +2904,228 @@ fn draw_cad_icon(painter: &egui::Painter, rect: egui::Rect, mode: ToolMode, is_a
             }
         }
         ToolMode::Model => draw_treasure_chest(painter, rect, is_active),
+        ToolMode::Dim
+        | ToolMode::DimLinear
+        | ToolMode::DimAligned
+        | ToolMode::DimContinue
+        | ToolMode::DimBaseline
+        | ToolMode::QDim => {
+            let o = rect.min;
+            let s = egui::Stroke::new(1.4, stroke_color);
+            let a = egui::Stroke::new(1.4, accent_color);
+            let (y, x0, x1) = (13.0, 6.0, 26.0);
+            if mode == ToolMode::DimAligned {
+                painter.line_segment([o + egui::vec2(6.0, 24.0), o + egui::vec2(24.0, 8.0)], a);
+                painter.line_segment([o + egui::vec2(8.0, 27.0), o + egui::vec2(4.0, 22.0)], s);
+                painter.line_segment([o + egui::vec2(26.0, 11.0), o + egui::vec2(22.0, 6.0)], s);
+            } else {
+                painter.line_segment([o + egui::vec2(x0, y), o + egui::vec2(x1, y)], a);
+                for x in [x0, x1] {
+                    painter.line_segment([o + egui::vec2(x, y - 4.0), o + egui::vec2(x, 26.0)], s);
+                }
+                let ticks: &[f32] = match mode {
+                    ToolMode::DimContinue => &[6.0, 16.0, 26.0],
+                    ToolMode::QDim => &[6.0, 12.0, 19.0, 26.0],
+                    _ => &[6.0, 26.0],
+                };
+                for &x in ticks {
+                    painter.line_segment([o + egui::vec2(x - 2.0, y + 2.0), o + egui::vec2(x + 2.0, y - 2.0)], a);
+                    painter.line_segment([o + egui::vec2(x, y), o + egui::vec2(x, 26.0)], s);
+                }
+                if mode == ToolMode::DimBaseline {
+                    painter.line_segment([o + egui::vec2(x0, 7.0), o + egui::vec2(x1, 7.0)], a);
+                }
+                if mode == ToolMode::Dim {
+                    painter.circle_filled(o + egui::vec2(16.0, 21.0), 2.5, egui::Color32::from_rgb(255, 215, 0));
+                }
+            }
+        }
+        ToolMode::DimAngular => {
+            let o = rect.min;
+            let v = o + egui::vec2(7.0, 25.0);
+            painter.line_segment([v, o + egui::vec2(27.0, 25.0)], egui::Stroke::new(1.4, stroke_color));
+            painter.line_segment([v, o + egui::vec2(21.0, 7.0)], egui::Stroke::new(1.4, stroke_color));
+            let pts: Vec<egui::Pos2> = (0..=8).map(|k| {
+                let a = (52.0f32 * k as f32 / 8.0).to_radians();
+                v + egui::vec2(13.0 * a.cos(), -13.0 * a.sin())
+            }).collect();
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, accent_color)));
+        }
+        ToolMode::DimRadius | ToolMode::DimDiameter => {
+            let c = rect.center();
+            painter.circle_stroke(c, 10.0, egui::Stroke::new(1.4, stroke_color));
+            let tip = c + egui::vec2(7.1, -7.1);
+            let from = if mode == ToolMode::DimDiameter { c - egui::vec2(7.1, -7.1) } else { c };
+            painter.line_segment([from, tip], egui::Stroke::new(1.5, accent_color));
+            painter.arrow(tip - egui::vec2(3.0, -3.0), egui::vec2(3.0, -3.0), egui::Stroke::new(1.5, accent_color));
+            painter.circle_filled(c, 1.6, accent_color);
+        }
+        ToolMode::MText => {
+            let o = rect.min;
+            painter.text(o + egui::vec2(10.0, 13.0), egui::Align2::CENTER_CENTER, "A", egui::FontId::proportional(15.0), stroke_color);
+            for (i, w) in [12.0f32, 16.0, 10.0].into_iter().enumerate() {
+                let y = 9.0 + i as f32 * 6.0;
+                painter.line_segment([o + egui::vec2(16.0, y), o + egui::vec2(16.0 + w * 0.65, y)], egui::Stroke::new(1.4, accent_color));
+            }
+            painter.line_segment([o + egui::vec2(5.0, 25.0), o + egui::vec2(27.0, 25.0)], egui::Stroke::new(1.2, accent_color));
+        }
+        ToolMode::MLeader => {
+            let o = rect.min;
+            let tip = o + egui::vec2(6.0, 26.0);
+            painter.line_segment([tip, o + egui::vec2(15.0, 13.0)], egui::Stroke::new(1.4, stroke_color));
+            painter.line_segment([o + egui::vec2(15.0, 13.0), o + egui::vec2(27.0, 13.0)], egui::Stroke::new(1.4, stroke_color));
+            painter.arrow(tip + egui::vec2(3.0, -4.3), egui::vec2(-3.0, 4.3), egui::Stroke::new(1.6, accent_color));
+            for y in [7.0f32, 10.0] {
+                painter.line_segment([o + egui::vec2(17.0, y), o + egui::vec2(27.0, y)], egui::Stroke::new(1.2, accent_color));
+            }
+        }
+        ToolMode::Erase => {
+            // Eraser block wiping a line
+            let o = rect.min;
+            let body = vec![o + egui::vec2(9.0, 18.0), o + egui::vec2(18.0, 9.0), o + egui::vec2(25.0, 16.0), o + egui::vec2(16.0, 25.0)];
+            painter.add(egui::Shape::convex_polygon(body, egui::Color32::from_rgb(235, 120, 130), egui::Stroke::new(1.4, stroke_color)));
+            painter.line_segment([o + egui::vec2(12.5, 14.5), o + egui::vec2(19.5, 21.5)], egui::Stroke::new(1.2, stroke_color));
+            painter.line_segment([o + egui::vec2(6.0, 26.0), o + egui::vec2(26.0, 26.0)], egui::Stroke::new(1.2, accent_color));
+        }
+        ToolMode::Copy => {
+            let a = egui::Rect::from_min_size(rect.min + egui::vec2(7.0, 7.0), egui::vec2(12.0, 12.0));
+            let b = a.translate(egui::vec2(7.0, 7.0));
+            painter.rect_stroke(a, 1.0, egui::Stroke::new(1.4, stroke_color), egui::StrokeKind::Middle);
+            painter.rect_filled(b, 1.0, egui::Color32::from_rgb(70, 78, 92));
+            painter.rect_stroke(b, 1.0, egui::Stroke::new(1.6, accent_color), egui::StrokeKind::Middle);
+        }
+        ToolMode::Trim => {
+            // Line cut back to a boundary; the removed part dashed in red
+            let o = rect.min;
+            painter.line_segment([o + egui::vec2(18.0, 6.0), o + egui::vec2(18.0, 26.0)], egui::Stroke::new(1.8, stroke_color));
+            painter.line_segment([o + egui::vec2(5.0, 16.0), o + egui::vec2(18.0, 16.0)], egui::Stroke::new(1.8, accent_color));
+            painter.extend(egui::Shape::dashed_line(&[o + egui::vec2(18.0, 16.0), o + egui::vec2(27.0, 16.0)], egui::Stroke::new(1.4, egui::Color32::from_rgb(240, 100, 100)), 2.5, 2.0));
+        }
+        ToolMode::Extend => {
+            let o = rect.min;
+            painter.line_segment([o + egui::vec2(25.0, 6.0), o + egui::vec2(25.0, 26.0)], egui::Stroke::new(1.8, stroke_color));
+            painter.line_segment([o + egui::vec2(5.0, 16.0), o + egui::vec2(14.0, 16.0)], egui::Stroke::new(1.8, accent_color));
+            painter.arrow(o + egui::vec2(14.0, 16.0), egui::vec2(10.0, 0.0), egui::Stroke::new(1.4, egui::Color32::from_rgb(120, 230, 160)));
+        }
+        ToolMode::Mirror => {
+            let o = rect.min;
+            painter.extend(egui::Shape::dashed_line(&[o + egui::vec2(16.0, 5.0), o + egui::vec2(16.0, 27.0)], egui::Stroke::new(1.2, egui::Color32::from_rgb(255, 215, 0)), 2.5, 2.0));
+            let left = vec![o + egui::vec2(13.0, 9.0), o + egui::vec2(13.0, 23.0), o + egui::vec2(5.0, 23.0)];
+            let right = vec![o + egui::vec2(19.0, 9.0), o + egui::vec2(27.0, 23.0), o + egui::vec2(19.0, 23.0)];
+            painter.add(egui::Shape::convex_polygon(left, egui::Color32::from_rgb(70, 78, 92), egui::Stroke::new(1.4, stroke_color)));
+            painter.add(egui::Shape::convex_polygon(right, egui::Color32::TRANSPARENT, egui::Stroke::new(1.4, accent_color)));
+        }
+        ToolMode::Offset => {
+            for (i, r) in [7.0f32, 12.0].into_iter().enumerate() {
+                let c = rect.min + egui::vec2(8.0, 25.0);
+                let pts: Vec<egui::Pos2> = (0..=10)
+                    .map(|k| {
+                        let a = -std::f32::consts::FRAC_PI_2 * k as f32 / 10.0;
+                        c + egui::vec2(r * 1.4 * a.cos(), r * 1.4 * a.sin())
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.6, if i == 0 { stroke_color } else { accent_color })));
+            }
+        }
+        ToolMode::Array => {
+            for row in 0..3 {
+                for col in 0..3 {
+                    let r = egui::Rect::from_min_size(rect.min + egui::vec2(6.0 + col as f32 * 7.5, 6.0 + row as f32 * 7.5), egui::vec2(5.0, 5.0));
+                    painter.rect_filled(r, 1.0, if (row, col) == (0, 0) { accent_color } else { stroke_color });
+                }
+            }
+        }
+        ToolMode::Rotate => {
+            let c = rect.center();
+            let pts: Vec<egui::Pos2> = (0..=16)
+                .map(|k| {
+                    let a = (-30.0f32 + 270.0 * k as f32 / 16.0).to_radians();
+                    c + egui::vec2(9.0 * a.cos(), -9.0 * a.sin())
+                })
+                .collect();
+            let tip = *pts.last().unwrap();
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.7, stroke_color)));
+            painter.arrow(tip + egui::vec2(-3.5, -2.0), egui::vec2(3.5, 2.0), egui::Stroke::new(1.7, stroke_color));
+            painter.circle_filled(c, 2.2, accent_color);
+        }
+        ToolMode::Scale => {
+            let o = rect.min;
+            painter.rect_stroke(egui::Rect::from_min_size(o + egui::vec2(6.0, 16.0), egui::vec2(10.0, 10.0)), 0.0, egui::Stroke::new(1.4, stroke_color), egui::StrokeKind::Middle);
+            painter.rect_stroke(egui::Rect::from_min_size(o + egui::vec2(6.0, 6.0), egui::vec2(20.0, 20.0)), 0.0, egui::Stroke::new(1.2, accent_color), egui::StrokeKind::Middle);
+            painter.arrow(o + egui::vec2(15.0, 17.0), egui::vec2(8.0, -8.0), egui::Stroke::new(1.4, accent_color));
+        }
+        ToolMode::Fillet | ToolMode::Chamfer => {
+            let o = rect.min;
+            painter.line_segment([o + egui::vec2(6.0, 25.0), o + egui::vec2(6.0, 15.0)], egui::Stroke::new(1.8, stroke_color));
+            painter.line_segment([o + egui::vec2(16.0, 6.0), o + egui::vec2(26.0, 6.0)], egui::Stroke::new(1.8, stroke_color));
+            if mode == ToolMode::Fillet {
+                let c = o + egui::vec2(16.0, 15.0);
+                let pts: Vec<egui::Pos2> = (0..=10)
+                    .map(|k| {
+                        let a = std::f32::consts::PI - std::f32::consts::FRAC_PI_2 * k as f32 / 10.0;
+                        c + egui::vec2(10.0 * a.cos(), -9.0 * a.sin())
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.8, accent_color)));
+            } else {
+                painter.line_segment([o + egui::vec2(6.0, 15.0), o + egui::vec2(16.0, 6.0)], egui::Stroke::new(1.8, accent_color));
+            }
+            painter.extend(egui::Shape::dashed_line(&[o + egui::vec2(6.0, 15.0), o + egui::vec2(6.0, 6.0), o + egui::vec2(16.0, 6.0)], egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(200, 200, 200, 90)), 2.0, 2.0));
+        }
+        ToolMode::DraftLine => {
+            let (a, b) = (rect.min + egui::vec2(7.0, 24.0), rect.min + egui::vec2(25.0, 8.0));
+            painter.line_segment([a, b], egui::Stroke::new(1.8, stroke_color));
+            painter.circle_filled(a, 2.4, accent_color);
+            painter.circle_filled(b, 2.4, accent_color);
+        }
+        ToolMode::DraftPolyline => {
+            let pts = [(6.0, 22.0), (12.0, 10.0), (19.0, 20.0), (26.0, 9.0)].map(|(x, y)| rect.min + egui::vec2(x, y));
+            for w in pts.windows(2) {
+                painter.line_segment([w[0], w[1]], egui::Stroke::new(1.8, stroke_color));
+            }
+            for p in pts {
+                painter.circle_filled(p, 2.0, accent_color);
+            }
+        }
+        ToolMode::DraftCircle => {
+            painter.circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.8, stroke_color));
+            painter.circle_filled(rect.center(), 1.8, accent_color);
+            painter.line_segment([rect.center(), rect.center() + egui::vec2(6.7, -6.7)], egui::Stroke::new(1.0, accent_color));
+        }
+        ToolMode::DraftArc => {
+            let c = rect.min + egui::vec2(16.0, 24.0);
+            let pts: Vec<egui::Pos2> = (0..=12)
+                .map(|i| {
+                    let a = std::f32::consts::PI * (1.0 - i as f32 / 12.0);
+                    c + egui::vec2(11.0 * a.cos(), -13.0 * a.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts.clone(), egui::Stroke::new(1.8, stroke_color)));
+            for p in [pts[0], pts[6], pts[12]] {
+                painter.circle_filled(p, 2.2, accent_color);
+            }
+        }
+        ToolMode::DraftSpline => {
+            let pts: Vec<egui::Pos2> = (0..=16)
+                .map(|i| {
+                    let t = i as f32 / 16.0;
+                    rect.min + egui::vec2(6.0 + 20.0 * t, 16.0 - 7.0 * (t * std::f32::consts::TAU).sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.8, stroke_color)));
+            for (x, y) in [(6.0, 16.0), (11.0, 9.0), (21.0, 23.0), (26.0, 16.0)] {
+                painter.circle_filled(rect.min + egui::vec2(x, y), 1.8, accent_color);
+            }
+        }
+        ToolMode::DraftHatch => {
+            let r = egui::Rect::from_min_size(rect.min + egui::vec2(7.0, 7.0), egui::vec2(18.0, 18.0));
+            let clip = painter.with_clip_rect(r);
+            for k in 0..6 {
+                let o = k as f32 * 6.0 - 6.0;
+                clip.line_segment([r.left_bottom() + egui::vec2(o, 0.0), r.left_bottom() + egui::vec2(o + 18.0, -18.0)], egui::Stroke::new(1.1, accent_color));
+            }
+            painter.rect_stroke(r, 0.0, egui::Stroke::new(1.6, stroke_color), egui::StrokeKind::Middle);
+        }
         ToolMode::Paint => {
             // Tilted paint bucket pouring a drip of paint
             let o = rect.min;
@@ -2487,5 +3143,95 @@ fn draw_cad_icon(painter: &egui::Painter, rect: egui::Rect, mode: ToolMode, is_a
             painter.circle_filled(o + egui::vec2(25.0, 24.5), 2.6, paint);
         }
 
+    }
+}
+
+#[cfg(test)]
+mod command_line_tests {
+    use super::*;
+
+    fn app() -> (egui::Context, SketchCadApp) {
+        let ctx = egui::Context::default();
+        let mut app = SketchCadApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.doc = BimDocument::new("commands");
+        (ctx, app)
+    }
+
+    fn type_keys(ctx: &egui::Context, app: &mut SketchCadApp, letters: &str) {
+        app.handle_command_keys(ctx, letters.chars().collect(), CommandKeys::default());
+    }
+
+    #[test]
+    fn aliases_run_when_unambiguous_or_on_enter() {
+        let (ctx, mut app) = app();
+        type_keys(&ctx, &mut app, "TR");
+        assert_eq!(app.tool_mode, ToolMode::Trim);
+        type_keys(&ctx, &mut app, "CO");
+        assert_eq!(app.command_buffer, "CO", "CO could still become COPYTOLAYER");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert_eq!(app.tool_mode, ToolMode::Copy);
+        type_keys(&ctx, &mut app, "CHA");
+        assert_eq!(app.tool_mode, ToolMode::Chamfer);
+        type_keys(&ctx, &mut app, "F");
+        assert_eq!(app.tool_mode, ToolMode::Fillet, "F is fillet, as in AutoCAD");
+        type_keys(&ctx, &mut app, "O");
+        assert_eq!(app.tool_mode, ToolMode::Offset);
+
+        // "C" could still become CO / CP / CI / CHA: it waits for Enter
+        type_keys(&ctx, &mut app, "C");
+        assert_eq!((app.tool_mode, app.command_buffer.as_str()), (ToolMode::Offset, "C"));
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert_eq!((app.tool_mode, app.command_buffer.as_str()), (ToolMode::Column, ""));
+
+        type_keys(&ctx, &mut app, "SL");
+        assert_eq!(app.tool_mode, ToolMode::Slab, "slab moved to SL");
+        type_keys(&ctx, &mut app, "QZ");
+        assert!(app.command_buffer.is_empty(), "unknown input is dropped");
+        type_keys(&ctx, &mut app, "DLI");
+        assert_eq!(app.tool_mode, ToolMode::DimLinear);
+        type_keys(&ctx, &mut app, "DIMANGULAR");
+        assert_eq!(app.tool_mode, ToolMode::DimAngular, "full AutoCAD command names work too");
+        type_keys(&ctx, &mut app, "MT");
+        assert_eq!(app.command_buffer, "MT", "MT could still become MTEXT");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert_eq!(app.tool_mode, ToolMode::MText);
+        type_keys(&ctx, &mut app, "D");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert_eq!(app.tool_mode, ToolMode::Door, "D + Enter is still the door tool");
+        type_keys(&ctx, &mut app, "MI");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { cancel: true, ..Default::default() });
+        assert_eq!(app.tool_mode, ToolMode::Select, "Esc cancels");
+    }
+
+    #[test]
+    fn erase_deletes_the_selection_and_properties_opens_the_panel() {
+        let (ctx, mut app) = app();
+        let id = app.doc.insert_draft(sketchcad_bim::DraftGeometry::Line { start: Point2D::ZERO, end: Point2D::new(100.0, 0.0) }, 0.0);
+        app.selected_id = Some(id);
+        type_keys(&ctx, &mut app, "E");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert!(app.doc.get_element(id).is_none() && app.selected_id.is_none());
+        assert_eq!(app.undo_stack.len(), 1, "erase can be undone");
+        type_keys(&ctx, &mut app, "E");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert_eq!(app.tool_mode, ToolMode::Erase, "without a selection E picks objects to erase");
+
+        // Layers: LA + Enter opens the manager, LAYISO / LAYUNISO isolate the selection's layer
+        type_keys(&ctx, &mut app, "LA");
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { execute: true, ..Default::default() });
+        assert!(app.layer_ui.manager_open);
+        let wall = app.doc.add_element(sketchcad_bim::Wall::new(Point2D::ZERO, Point2D::new(1000.0, 0.0), 200.0, 3000.0, sketchcad_bim::Material::concrete()));
+        let note = app.doc.insert_draft(sketchcad_bim::DraftGeometry::Line { start: Point2D::ZERO, end: Point2D::new(0.0, 100.0) }, 0.0);
+        app.selected_id = Some(wall);
+        type_keys(&ctx, &mut app, "LAYISO");
+        assert!(app.doc.is_visible(wall) && !app.doc.is_visible(note));
+        type_keys(&ctx, &mut app, "LAYUNISO");
+        assert!(app.doc.is_visible(note));
+        type_keys(&ctx, &mut app, "COPYTOLAYER");
+        assert!(app.layer_ui_copy_dialog_open());
+
+        app.show_inspector = false;
+        app.handle_command_keys(&ctx, Vec::new(), CommandKeys { properties: true, ..Default::default() });
+        assert!(app.show_inspector && app.inspector_state.active_tab == crate::gui::inspector::InspectorTab::PropertyGrid);
     }
 }
