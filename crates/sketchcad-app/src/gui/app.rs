@@ -1,5 +1,6 @@
 use crate::gui::inspector::{InspectorPanel, InspectorState};
 use crate::gui::material_library::MaterialLibraryState;
+use crate::gui::model_browser::ModelBrowserState;
 use crate::gui::viewport_2d::{ToolMode, Viewport2D};
 use crate::gui::viewport_3d::Viewport3D;
 use eframe::egui;
@@ -68,6 +69,7 @@ pub struct SketchCadApp {
     // Paint bucket (油漆桶) state
     pub paint_material: Material,
     pub material_library: MaterialLibraryState,
+    pub model_browser: ModelBrowserState,
 }
 
 impl SketchCadApp {
@@ -111,6 +113,7 @@ impl SketchCadApp {
             updater,
             paint_material: Material::brick(),
             material_library: MaterialLibraryState::load(),
+            model_browser: ModelBrowserState::default(),
         }
     }
 
@@ -1068,14 +1071,16 @@ impl eframe::App for SketchCadApp {
                 } else if i.key_pressed(egui::Key::T) {
                     self.tool_mode = ToolMode::Ceiling;
                     self.viewport_2d.ceiling_start_pt = None;
-                } else if i.key_pressed(egui::Key::R) && self.tool_mode != ToolMode::Furniture {
-                    // In the Furniture tool R rotates the piece being placed instead
+                } else if i.key_pressed(egui::Key::R) && !matches!(self.tool_mode, ToolMode::Furniture | ToolMode::Model) {
+                    // In the Furniture and Model tools R rotates the piece being placed instead
                     self.tool_mode = ToolMode::Stairs;
                     self.viewport_2d.stair_start_pt = None;
                 } else if i.key_pressed(egui::Key::P) {
                     self.tool_mode = ToolMode::PushPull;
                 } else if i.key_pressed(egui::Key::K) {
                     self.tool_mode = ToolMode::Paint;
+                } else if i.key_pressed(egui::Key::B) {
+                    self.tool_mode = ToolMode::Model;
                 }
             });
         }
@@ -1209,6 +1214,10 @@ impl eframe::App for SketchCadApp {
                     ui.checkbox(&mut self.viewport_2d.show_dimensions, "📐 顯示 2D 尺寸標註與輔助線");
                     ui.checkbox(&mut self.viewport_3d.settings.enable_section_cut, "🔪 啟用 3D 動態剖切盒 (透視室內裝修)");
                     ui.separator();
+                    if ui.button("📦 3D 模型百寶箱 (Model Library)... [B]").clicked() {
+                        self.tool_mode = ToolMode::Model;
+                        ui.close_menu();
+                    }
                     if ui.button("🎨 材質庫 (Material Library)...").clicked() {
                         self.material_library.open = true;
                         ui.close_menu();
@@ -1341,6 +1350,11 @@ impl eframe::App for SketchCadApp {
                         ToolMode::Outlet,
                         "電源插座 (Outlet) [美規/歐規 · 110V/220V]",
                         "移動至牆體旁點擊即安裝於該側牆面 (離地 300mm)；於工具列選擇美規 / 歐規、110V / 220V 與單插 / 雙插",
+                    ),
+                    (
+                        ToolMode::Model,
+                        "3D 模型百寶箱 (Model Library) [B]",
+                        "開啟模型百寶箱，從建築構件、家具、電器、盆栽、植物景觀、車輛、戶外設施與人物配景中挑選預建 3D 模型，在 2D 平面點擊放置 (按 R 旋轉)",
                     ),
                     (
                         ToolMode::LightFixture,
@@ -1572,6 +1586,7 @@ impl eframe::App for SketchCadApp {
                     ToolMode::Furniture => "_FURNITURE [在平面圖點擊以放置家具，按 R 鍵可旋轉 90° 方向]",
                     ToolMode::LightFixture => "_LIGHT [在平面圖點擊天花板位置以安裝照明燈具]",
                     ToolMode::Paint => "_PAINT [點擊 2D / 3D 視口中的構件貼附目前材質；Alt + 點擊吸取材質]",
+                    ToolMode::Model => "_MODEL [從模型百寶箱選擇模型後在 2D 平面點擊放置，按 R 鍵旋轉 90°]",
                     ToolMode::Outlet => "_OUTLET [移動至牆體旁點擊，於滑鼠所在側牆面安裝電源插座]",
                 };
 
@@ -1761,6 +1776,9 @@ impl eframe::App for SketchCadApp {
         }
         if self.tool_mode == ToolMode::Paint || self.material_library.open {
             self.render_material_library(ctx);
+        }
+        if self.tool_mode == ToolMode::Model || self.model_browser.open {
+            self.render_model_browser(ctx);
         }
 
         // 6. File Dialog Modals (Open, Export, Save As)
@@ -2259,6 +2277,17 @@ fn draw_cad_icon(painter: &egui::Painter, rect: egui::Rect, mode: ToolMode, is_a
                 }
                 painter.circle_filled(c + egui::vec2(0.0, 2.5), 0.9, accent_color);
             }
+        }
+        ToolMode::Model => {
+            // Isometric cube (the model library's box of ready-made models)
+            let c = rect.center();
+            let top = [c + egui::vec2(0.0, -10.0), c + egui::vec2(9.0, -5.0), c + egui::vec2(0.0, 0.0), c + egui::vec2(-9.0, -5.0)];
+            let left = [c + egui::vec2(-9.0, -5.0), c + egui::vec2(0.0, 0.0), c + egui::vec2(0.0, 10.0), c + egui::vec2(-9.0, 5.0)];
+            let right = [c + egui::vec2(0.0, 0.0), c + egui::vec2(9.0, -5.0), c + egui::vec2(9.0, 5.0), c + egui::vec2(0.0, 10.0)];
+            let stroke = egui::Stroke::new(1.3, stroke_color);
+            painter.add(egui::Shape::convex_polygon(top.to_vec(), accent_color, stroke));
+            painter.add(egui::Shape::convex_polygon(left.to_vec(), egui::Color32::from_rgb(70, 78, 92), stroke));
+            painter.add(egui::Shape::convex_polygon(right.to_vec(), egui::Color32::from_rgb(95, 105, 122), stroke));
         }
         ToolMode::Paint => {
             // Tilted paint bucket pouring a drip of paint

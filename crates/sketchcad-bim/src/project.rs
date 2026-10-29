@@ -3,7 +3,7 @@ use crate::element::BimElement;
 use crate::material::Material;
 use crate::{
     Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, IfcComponent, LightFixture,
-    Mullion, Outlet, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
+    ModelComponent, Mullion, Outlet, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub enum SerializableElement {
     LightFixture(LightFixture),
     IfcComponent(IfcComponent),
     Outlet(Outlet),
+    Model(ModelComponent),
 }
 
 impl SerializableElement {
@@ -58,6 +59,7 @@ impl SerializableElement {
             SerializableElement::LightFixture(l) => Box::new(l),
             SerializableElement::IfcComponent(c) => Box::new(c),
             SerializableElement::Outlet(o) => Box::new(o),
+            SerializableElement::Model(m) => Box::new(m),
         }
     }
 }
@@ -103,6 +105,8 @@ pub fn element_to_serializable(elem: &dyn BimElement) -> Option<SerializableElem
         Some(SerializableElement::IfcComponent(c.clone()))
     } else if let Some(o) = any.downcast_ref::<Outlet>() {
         Some(SerializableElement::Outlet(o.clone()))
+    } else if let Some(m) = any.downcast_ref::<ModelComponent>() {
+        Some(SerializableElement::Model(m.clone()))
     } else {
         None
     }

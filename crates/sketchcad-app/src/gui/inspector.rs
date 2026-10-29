@@ -68,6 +68,7 @@ pub fn kind_display_name(kind: ElementKind) -> &'static str {
         ElementKind::Furniture => "室內家具",
         ElementKind::LightFixture => "照明燈具",
         ElementKind::Outlet => "電源插座",
+        ElementKind::Model => "模型元件",
     }
 }
 
@@ -225,6 +226,19 @@ fn render_hierarchy_tree(
             "furnishing",
             "🛋️ 室內空間與軟裝照明 (Space, FF&E & Lighting)",
             &[ElementKind::Space, ElementKind::Furniture, ElementKind::LightFixture, ElementKind::Outlet],
+        );
+
+        // Group 5: 📦 模型百寶箱元件 (3D model library instances)
+        render_category_group(
+            ui,
+            doc,
+            undo_stack,
+            clipboard,
+            selected_id,
+            state,
+            "models",
+            "📦 模型百寶箱元件 (3D Models)",
+            &[ElementKind::Model],
         );
 
     });
@@ -542,6 +556,10 @@ fn render_element_tree_node(
                     });
                 } else if let Some(o) = doc.get_outlet_mut(id) {
                     if outlet_spec_ui(ui, o) {
+                        needs_sync = true;
+                    }
+                } else if let Some(m) = doc.get_model_mut(id) {
+                    if model_placement_ui(ui, m) {
                         needs_sync = true;
                     }
                 } else if let Some(l) = doc.get_light_fixture_mut(id) {
@@ -1138,6 +1156,24 @@ fn render_selected_element_properties(
                 vs_property_row(ui, "參考單價 (Cost)", "FF&E 軟裝採購與組裝標準造價 (TWD)。", state, |ui| {
                     ui.label(format!("NT$ {:.0}", f.kind.default_cost()));
                 });
+            } else if let Some(m) = doc.get_model_mut(id) {
+                let (w, d, h) = m.size();
+                let category = m.category().map_or("未知模型", |c| c.label());
+                vs_property_row(ui, "模型 (Library Model)", "來自 3D 模型百寶箱的預建模型；可用油漆桶 [K] 改變主體顏色。", state, |ui| {
+                    ui.label(format!("{category} · {w:.0}×{d:.0}×{h:.0} mm"));
+                });
+                vs_property_row(ui, "擺放 (Placement)", "旋轉角度、等比縮放與離地高程。", state, |ui| {
+                    ui.vertical(|ui| {
+                        if model_placement_ui(ui, m) {
+                            needs_sync = true;
+                        }
+                    });
+                });
+                vs_property_row(ui, "單價 (Unit Price)", "每組採購單價 (TWD)；0 表示配景不計價。", state, |ui| {
+                    if ui.add(egui::DragValue::new(&mut m.unit_price).speed(100.0).range(0.0..=10_000_000.0).prefix("TWD ")).changed() {
+                        needs_sync = true;
+                    }
+                });
             } else if let Some(o) = doc.get_outlet_mut(id) {
                 vs_property_row(ui, "插座規格 (Outlet Spec)", "插座規格 (美規 NEMA / 歐規 Schuko)、迴路電壓 (110V / 220V) 與插孔數；變更後自動更新名稱與單價。", state, |ui| {
                     ui.vertical(|ui| {
@@ -1351,6 +1387,26 @@ fn render_selected_element_properties(
     if needs_sync {
         doc.sync();
     }
+}
+
+/// Rotation, uniform scale and elevation of a model-library instance. Returns true on change.
+fn model_placement_ui(ui: &mut Ui, m: &mut sketchcad_bim::ModelComponent) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("旋轉:");
+        changed |= ui.add(egui::DragValue::new(&mut m.rotation_deg).speed(1.0).range(-360.0..=360.0).suffix("°")).changed();
+        if ui.small_button("⟳90°").clicked() {
+            m.rotation_deg = (m.rotation_deg + 90.0) % 360.0;
+            changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("縮放:");
+        changed |= ui.add(egui::DragValue::new(&mut m.scale).speed(0.01).range(0.1..=10.0).suffix("×")).changed();
+        ui.label("高程:");
+        changed |= ui.add(egui::DragValue::new(&mut m.base_z).speed(10.0).range(-5000.0..=30000.0).suffix(" mm")).changed();
+    });
+    changed
 }
 
 /// Outlet standard / voltage / gang selectors and mounting height. Returns true on change.

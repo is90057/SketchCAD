@@ -221,7 +221,7 @@ fn native_style(kind: ElementKind) -> (LineStyle, Option<usize>) {
         | ElementKind::Railing
         | ElementKind::Ramp
         | ElementKind::CurtainGrid => (LineStyle::Symbol, None),
-        ElementKind::Furniture => (LineStyle::Furniture, None),
+        ElementKind::Furniture | ElementKind::Model => (LineStyle::Furniture, None),
         ElementKind::LightFixture | ElementKind::Outlet => (LineStyle::Fixture, None),
         ElementKind::Slab => (LineStyle::Projection, Some(1)),
         ElementKind::Space => (LineStyle::Boundary, Some(1)),

@@ -2,7 +2,7 @@ use crate::cost::QuantityTakeoff;
 use crate::element::{BimElement, ElementKind};
 use crate::material::Material;
 use crate::{
-    Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, LightFixture, Mullion, Outlet,
+    Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, LightFixture, ModelComponent, Mullion, Outlet,
     Railing, Ramp, Roof, Slab, Space, SpaceType, Stairs, Wall, Window,
 };
 
@@ -440,6 +440,26 @@ impl BimDocument {
             self.edited.insert(id);
         }
         elem
+    }
+
+    pub fn get_model(&self, id: ElementId) -> Option<&ModelComponent> {
+        self.elements.get(&id).and_then(|e| e.as_any().downcast_ref::<ModelComponent>())
+    }
+
+    pub fn get_model_mut(&mut self, id: ElementId) -> Option<&mut ModelComponent> {
+        let elem = self.elements.get_mut(&id).and_then(|e| e.as_any_mut().downcast_mut::<ModelComponent>());
+        if elem.is_some() {
+            self.edited.insert(id);
+        }
+        elem
+    }
+
+    /// Place a model from the 3D model library (模型百寶箱). Returns `None` for an unknown id.
+    pub fn insert_model(&mut self, model_id: &str, position: sketchcad_core::Point2D, rotation_deg: f64) -> Option<ElementId> {
+        let spec = crate::ModelSpec::find(model_id)?;
+        let id = self.add_element(ModelComponent::new(spec, position, rotation_deg));
+        self.sync();
+        Some(id)
     }
 
     /// Mount a power outlet on a wall face; `facing` points from the face into the room.
@@ -1274,6 +1294,23 @@ mod tests {
         assert_eq!(doc.element_material(plain), Some(&olive));
         assert_eq!(doc.paint_of(plain), None, "an unpainted element stays unpainted");
         assert_eq!(doc.element_material(untouched), Some(&Material::concrete()));
+    }
+
+    #[test]
+    fn library_models_are_placed_and_saved() {
+        let mut doc = BimDocument::new("Models");
+        assert!(doc.insert_model("no_such_model", Point2D::ZERO, 0.0).is_none());
+        let tree = doc.insert_model("broadleaf_tree", Point2D::new(3000.0, 0.0), 0.0).unwrap();
+        let car = doc.insert_model("sedan", Point2D::new(0.0, 5000.0), 90.0).unwrap();
+        doc.get_model_mut(car).unwrap().scale = 1.2;
+        doc.paint_element(car, Material::custom("Pearl White 珍珠白", sketchcad_geom::Color::rgb(240, 240, 235)));
+
+        let loaded = BimDocument::from_project(doc.to_project());
+        let saved_car = loaded.get_model(car).expect("model survives save / load");
+        assert_eq!((saved_car.model_id.as_str(), saved_car.rotation_deg, saved_car.scale), ("sedan", 90.0, 1.2));
+        assert_eq!(loaded.display_rgba(car), Some([240, 240, 235, 255]), "paint recolours the body");
+        assert_eq!(loaded.display_rgba(tree), crate::ModelSpec::find("broadleaf_tree").map(|s| s.body_color));
+        assert_eq!(loaded.get_element(tree).unwrap().to_3d_mesh(), doc.get_element(tree).unwrap().to_3d_mesh());
     }
 
     #[test]

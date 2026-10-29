@@ -180,6 +180,18 @@ impl IfcExporter {
             )?;
         }
 
+        // 10. Model-library components (furniture, appliances, plants, entourage)
+        for model in doc.get_elements_by_kind(ElementKind::Model) {
+            let entity_id = step_id;
+            step_id += 1;
+            let ifc_guid = model.id().to_ifc_guid();
+            writeln!(
+                file,
+                "#{}=IFCFURNISHINGELEMENT('{}', $, '{}', 'Model Library Component', $, $, $, $);",
+                entity_id, ifc_guid, model.name()
+            )?;
+        }
+
         writeln!(file, "ENDSEC;")?;
         writeln!(file, "END-ISO-10303-21;")?;
         Ok(())

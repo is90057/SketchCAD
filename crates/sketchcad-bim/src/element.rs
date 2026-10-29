@@ -23,6 +23,8 @@ pub enum ElementKind {
     Furniture,
     LightFixture,
     Outlet,
+    /// Instance of a 3D model-library model (模型百寶箱)
+    Model,
 }
 
 impl ElementKind {
@@ -48,6 +50,7 @@ impl ElementKind {
             ElementKind::Furniture => [165, 125, 85, 255], // Warm solid wood / upholstery
             ElementKind::LightFixture => [48, 52, 58, 255], // Luminaire hardware (chassis / trim)
             ElementKind::Outlet => [246, 246, 242, 255], // Wiring-device cover plate
+            ElementKind::Model => [190, 185, 175, 255],
         }
     }
 }

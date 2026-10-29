@@ -10,6 +10,7 @@ pub mod elements {
     pub mod furniture;
     pub mod ifc_component;
     pub mod light_fixture;
+    pub mod model_component;
     pub mod outlet;
     pub mod railing;
     pub mod ramp;
@@ -21,6 +22,7 @@ pub mod elements {
     pub mod window;
 }
 pub mod material;
+pub mod model_library;
 pub mod project;
 
 pub use cost::{CostLineItem, QuantityTakeoff};
@@ -35,6 +37,8 @@ pub use elements::door::{Door, DoorSwing};
 pub use elements::furniture::{Furniture, FurnitureKind};
 pub use elements::ifc_component::IfcComponent;
 pub use elements::light_fixture::{LightFixture, LightType};
+pub use elements::model_component::ModelComponent;
+pub use model_library::{ModelCategory, ModelGeometry, ModelSpec, CATALOG};
 pub use elements::outlet::{OutletVoltage, Outlet, PlugStandard};
 pub use elements::railing::Railing;
 pub use elements::ramp::Ramp;

@@ -31,6 +31,8 @@ pub enum ToolMode {
     Paint,
     /// Power outlet (插座) mounted on a wall face
     Outlet,
+    /// Place a model from the 3D model library (模型百寶箱)
+    Model,
 }
 
 pub struct Viewport2D {
@@ -53,6 +55,8 @@ pub struct Viewport2D {
     pub outlet_standard: PlugStandard,
     pub outlet_voltage: OutletVoltage,
     pub outlet_gangs: u8,
+    /// Catalogue id of the model placed with the Model tool
+    pub model_id: Option<&'static str>,
     pub move_base_pt: Option<Point2D>,
     pub snap_grid_size: f64, // mm, e.g. 100.0
     pub snap_enabled: bool,
@@ -112,6 +116,7 @@ impl Viewport2D {
             outlet_standard: PlugStandard::default(),
             outlet_voltage: OutletVoltage::default(),
             outlet_gangs: 2,
+            model_id: None,
             move_base_pt: None,
             snap_grid_size: 500.0,
             snap_enabled: true,
@@ -1298,6 +1303,48 @@ impl Viewport2D {
                         *status_msg = format!("✔ 已放置室內家具: {} ({:.0}x{:.0}mm)", kind.display_name(), fw, fd);
                     }
                 }
+                ToolMode::Model => {
+                    match self.model_id.and_then(sketchcad_bim::ModelSpec::find) {
+                        Some(spec) => {
+                            let rot_deg = self.furniture_rotation.to_degrees();
+                            let preview = sketchcad_bim::ModelComponent::new(spec, world_pt, rot_deg);
+                            let stroke = Stroke::new(1.8, Color32::from_rgb(120, 220, 160));
+                            for prim in sketchcad_bim::BimElement::to_2d_primitives(&preview) {
+                                let pts: Vec<Pos2> = prim.vertices.iter().map(|&p| to_screen(p)).collect();
+                                for pair in pts.windows(2) {
+                                    painter.line_segment([pair[0], pair[1]], stroke);
+                                }
+                                if prim.closed && pts.len() > 2 {
+                                    painter.line_segment([pts[pts.len() - 1], pts[0]], stroke);
+                                }
+                            }
+                            let (w, d, h) = preview.size();
+                            painter.text(
+                                to_screen(world_pt + Vector2D::new(0.0, -d * 0.5 - 300.0)),
+                                egui::Align2::CENTER_CENTER,
+                                format!("點擊放置 {} ({:.0}×{:.0}×{:.0}mm) [R 旋轉 90°]", spec.name, w, d, h),
+                                egui::FontId::monospace(12.0),
+                                Color32::from_rgb(150, 235, 180),
+                            );
+                            if response.clicked() {
+                                push_undo(undo_stack, doc);
+                                if let Some(id) = doc.insert_model(spec.id, world_pt, rot_deg) {
+                                    *selected_id = Some(id);
+                                    *status_msg = format!("✔ 已放置模型: {}", spec.name);
+                                }
+                            }
+                        }
+                        None => {
+                            painter.text(
+                                to_screen(world_pt) + egui::vec2(0.0, -24.0),
+                                egui::Align2::CENTER_CENTER,
+                                "請先從「📦 3D 模型百寶箱」選擇要放置的模型",
+                                egui::FontId::proportional(13.0),
+                                Color32::from_rgb(255, 200, 100),
+                            );
+                        }
+                    }
+                }
                 ToolMode::LightFixture => {
                     let l_type = self.light_cycle_type;
                     let (lumens, kelvin, watts, _) = l_type.default_specs();
@@ -2166,6 +2213,16 @@ pub fn pick_closest_element(doc: &BimDocument, world_pt: Point2D) -> Option<Elem
             if d < min_dist {
                 min_dist = d;
                 closest_id = Some(o.id);
+            }
+        }
+    }
+
+    for model in doc.get_elements_by_kind(sketchcad_bim::ElementKind::Model) {
+        if let Some(m) = doc.get_model(model.id()) {
+            let d = world_pt.distance(m.position);
+            if d < min_dist {
+                min_dist = d;
+                closest_id = Some(m.id);
             }
         }
     }
