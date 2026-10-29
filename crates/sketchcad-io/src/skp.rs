@@ -186,24 +186,28 @@ impl SkpExporter {
             if !doc.is_visible(elem.id()) {
                 continue;
             }
-            let faces = mesh_to_skp_faces(&elem.to_3d_mesh());
-            if faces.is_empty() {
-                continue;
-            }
-            let rgba = elem.display_color().unwrap_or_else(|| elem.kind().display_rgba());
-            let material = *material_index.entry(rgba).or_insert_with(|| {
-                model.materials.push(SkpMaterial {
-                    name: format!("{:?}_{:02X}{:02X}{:02X}", elem.kind(), rgba[0], rgba[1], rgba[2]),
-                    rgba,
-                });
-                model.materials.len() - 1
-            });
             let layer_name = format!("{:?}", elem.kind());
             let layer = *layer_index.entry(layer_name.clone()).or_insert_with(|| {
                 model.layers.push(layer_name);
                 model.layers.len() - 1
             });
-            model.groups.push(SkpGroup { name: elem.name().to_string(), layer: Some(layer), material: Some(material), faces });
+            let element_rgba = doc.display_rgba(elem.id()).unwrap_or_else(|| elem.kind().display_rgba());
+            // One group per colour: e.g. a window's frame and its glass
+            for (part, (rgba, mesh)) in split_by_face_color(&elem.to_3d_mesh(), element_rgba).into_iter().enumerate() {
+                let faces = mesh_to_skp_faces(&mesh);
+                if faces.is_empty() {
+                    continue;
+                }
+                let material = *material_index.entry(rgba).or_insert_with(|| {
+                    model.materials.push(SkpMaterial {
+                        name: format!("{:?}_{:02X}{:02X}{:02X}", elem.kind(), rgba[0], rgba[1], rgba[2]),
+                        rgba,
+                    });
+                    model.materials.len() - 1
+                });
+                let name = if part == 0 { elem.name().to_string() } else { format!("{} ({})", elem.name(), part + 1) };
+                model.groups.push(SkpGroup { name, layer: Some(layer), material: Some(material), faces });
+            }
         }
         if model.groups.is_empty() {
             return Err(SkpError::Empty);
@@ -217,6 +221,35 @@ impl SkpExporter {
 
 /// Merges coplanar, edge-connected triangles into planar faces (outer loop + holes) in inches.
 /// Regions whose outline cannot be traced unambiguously are written as soft-edged triangles.
+/// Splits a mesh by per-triangle colour override (`base` for triangles without one), keeping
+/// first-seen colour order so the element's own colour comes first when it is used.
+fn split_by_face_color(mesh: &TriangleMesh, base: [u8; 4]) -> Vec<([u8; 4], TriangleMesh)> {
+    if mesh.face_colors.is_empty() {
+        return vec![(base, mesh.clone())];
+    }
+    let mut parts: Vec<([u8; 4], TriangleMesh)> = Vec::new();
+    for (t, tri) in mesh.indices.chunks_exact(3).enumerate() {
+        if tri.iter().any(|&i| i as usize >= mesh.positions.len()) {
+            continue;
+        }
+        let rgba = mesh.face_color(t).unwrap_or(base);
+        let part = match parts.iter().position(|(c, _)| *c == rgba) {
+            Some(i) => &mut parts[i].1,
+            None => {
+                parts.push((rgba, TriangleMesh::new()));
+                &mut parts.last_mut().expect("just pushed").1
+            }
+        };
+        let first = part.positions.len() as u32;
+        for &i in tri {
+            part.positions.push(mesh.positions[i as usize]);
+            part.normals.push(mesh.normals.get(i as usize).copied().unwrap_or(Vector3D::Z));
+        }
+        part.indices.extend_from_slice(&[first, first + 1, first + 2]);
+    }
+    parts
+}
+
 pub fn mesh_to_skp_faces(mesh: &TriangleMesh) -> Vec<SkpFace> {
     type Key = (i64, i64, i64);
     let quantize = |p: Point3D| -> Key { ((p.x * 100.0).round() as i64, (p.y * 100.0).round() as i64, (p.z * 100.0).round() as i64) };

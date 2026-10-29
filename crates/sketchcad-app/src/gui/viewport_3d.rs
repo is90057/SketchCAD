@@ -181,7 +181,8 @@ impl Viewport3D {
         self.camera.pitch_rad = HOME_PITCH;
     }
 
-    pub fn render(&mut self, ui: &mut Ui, doc: &BimDocument, selected_id: &mut Option<ElementId>) {
+    /// Draws the 3D view. Returns the element hit by a click in the scene this frame.
+    pub fn render(&mut self, ui: &mut Ui, doc: &BimDocument, selected_id: &mut Option<ElementId>) -> Option<ElementId> {
         let avail = ui.available_size();
         let size = egui::Vec2::new(avail.x.max(100.0), avail.y.max(100.0));
         let (response, painter) = ui.allocate_painter(
@@ -381,6 +382,9 @@ impl Viewport3D {
                     });
             });
         }
+
+        // A scene click re-picks `selected_id` (None on empty space)
+        if clicked_scene { *selected_id } else { None }
     }
 
     /// Smoothly turns the camera toward the orientation chosen on the ViewCube.
@@ -664,7 +668,7 @@ impl Viewport3D {
 
             let mut mesh = elem.to_3d_mesh();
             mesh.compute_crease_edges(CREASE_ANGLE_DEG.to_radians());
-            let material = element_material(elem, &self.settings);
+            let material = element_material(doc, elem, &self.settings);
 
             // Each feature edge is shared by two triangles; draw it only once.
             let quantize = |p: Point3D| ((p.x * 10.0).round() as i64, (p.y * 10.0).round() as i64, (p.z * 10.0).round() as i64);
@@ -690,7 +694,7 @@ impl Viewport3D {
                 let face_normal = cross / cross_len;
                 let centroid = (v[0] + v[1] + v[2]) * (1.0 / 3.0);
 
-                let (fill, edge) = shade_triangle(&self.settings, kind, material, face_normal, centroid, light_dir);
+                let (fill, edge) = shade_triangle(&self.settings, kind, triangle_material(&mesh, i, material), face_normal, centroid, light_dir);
                 let fill_rgba = fill.to_srgba_unmultiplied();
                 let edge_rgba = edge.to_srgba_unmultiplied();
 
@@ -937,7 +941,7 @@ impl Viewport3D {
             let kind = elem.kind();
             let mut mesh = elem.to_3d_mesh();
             mesh.compute_crease_edges(CREASE_ANGLE_DEG.to_radians());
-            let material = element_material(elem, &self.settings);
+            let material = element_material(doc, elem, &self.settings);
             if let Some(b) = mesh.bbox() {
                 bounds = Some(bounds.map_or((b.min, b.max), |(lo, hi)| (lo.min(b.min), hi.max(b.max))));
             }
@@ -959,7 +963,7 @@ impl Viewport3D {
                 let face_normal = cross / cross_len;
                 let view_dir = centroid - eye_pos;
 
-                let (fill_color, edge_color) = shade_triangle(&self.settings, kind, material, face_normal, centroid, light_dir);
+                let (fill_color, edge_color) = shade_triangle(&self.settings, kind, triangle_material(&mesh, i, material), face_normal, centroid, light_dir);
                 // Back-face culling for opaque surfaces
                 if fill_color.a() == 255 && view_dir.dot(face_normal) >= 0.0 {
                     continue;
@@ -1017,12 +1021,20 @@ impl Viewport3D {
     }
 }
 
-/// Material of an element: its own source-model colour when it has one (imported SketchUp
-/// geometry), otherwise the palette colour of its kind.
-fn element_material(elem: &dyn sketchcad_bim::BimElement, settings: &Viewport3DSettings) -> ([u8; 3], bool, u8) {
-    match elem.display_color() {
+/// Material of an element: its paint-bucket finish or source-model colour (imported SketchUp
+/// geometry) when it has one, otherwise the palette colour of its kind.
+fn element_material(doc: &BimDocument, elem: &dyn sketchcad_bim::BimElement, settings: &Viewport3DSettings) -> ([u8; 3], bool, u8) {
+    match doc.display_rgba(elem.id()) {
         Some([r, g, b, a]) => ([r, g, b], a < 255, a),
         None => material_for(elem.kind(), settings),
+    }
+}
+
+/// Material of triangle `i`: its own colour override (e.g. window glass), else the element's.
+fn triangle_material(mesh: &sketchcad_geom::TriangleMesh, i: usize, element: ([u8; 3], bool, u8)) -> ([u8; 3], bool, u8) {
+    match mesh.face_color(i) {
+        Some([r, g, b, a]) => ([r, g, b], a < 255, a),
+        None => element,
     }
 }
 

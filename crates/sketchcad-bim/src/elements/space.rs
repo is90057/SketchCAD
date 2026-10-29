@@ -282,6 +282,7 @@ impl BimElement for Space {
             normals,
             indices,
             edge_flags,
+            ..Default::default()
         }
     }
 

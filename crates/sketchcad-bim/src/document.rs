@@ -1,7 +1,8 @@
 use crate::cost::QuantityTakeoff;
 use crate::element::{BimElement, ElementKind};
+use crate::material::Material;
 use crate::{
-    Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, LightFixture, Mullion,
+    Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, LightFixture, Mullion, Outlet,
     Railing, Ramp, Roof, Slab, Space, SpaceType, Stairs, Wall, Window,
 };
 
@@ -11,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::project::{element_to_serializable, SketchCadProject};
+use crate::project::{element_to_serializable, PaintedElement, SketchCadProject};
 
 /// A building level (樓層) used to generate one floor-plan sheet per storey.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +45,10 @@ pub struct BimDocument {
     revision: u64,
     /// Elements handed out through `get_*_mut`; their content may change without a revision bump.
     edited: HashSet<ElementId>,
+    /// User-added materials, offered after the built-in presets (材質庫)
+    custom_materials: Vec<Material>,
+    /// Paint-bucket finish applied to an element; overrides its display colour
+    painted: HashMap<ElementId, Material>,
 }
 
 impl Clone for BimDocument {
@@ -61,6 +66,8 @@ impl Clone for BimDocument {
             storeys: self.storeys.clone(),
             revision: self.revision,
             edited: self.edited.clone(),
+            custom_materials: self.custom_materials.clone(),
+            painted: self.painted.clone(),
         }
     }
 }
@@ -76,6 +83,8 @@ impl BimDocument {
             storeys: Vec::new(),
             revision: next_revision(),
             edited: HashSet::new(),
+            custom_materials: Vec::new(),
+            painted: HashMap::new(),
         }
     }
 
@@ -149,6 +158,9 @@ impl BimDocument {
         let mut new_elem = source.clone_with_new_id();
         new_elem.translate(offset);
         let new_id = new_elem.id();
+        if let Some(paint) = self.painted.get(&source.id()).cloned() {
+            self.painted.insert(new_id, paint);
+        }
         let deps = new_elem.dependencies();
 
         self.elements.insert(new_id, new_elem);
@@ -168,6 +180,7 @@ impl BimDocument {
         self.touch();
         if self.elements.remove(&id).is_some() {
             self.hidden_elements.remove(&id);
+            self.painted.remove(&id);
             self.dependency_graph.remove_element(id);
             self.events.push(ChangeEvent::ElementDeleted(id));
             self.sync();
@@ -415,6 +428,34 @@ impl BimDocument {
             self.edited.insert(id);
         }
         elem
+    }
+
+    pub fn get_outlet(&self, id: ElementId) -> Option<&Outlet> {
+        self.elements.get(&id).and_then(|e| e.as_any().downcast_ref::<Outlet>())
+    }
+
+    pub fn get_outlet_mut(&mut self, id: ElementId) -> Option<&mut Outlet> {
+        let elem = self.elements.get_mut(&id).and_then(|e| e.as_any_mut().downcast_mut::<Outlet>());
+        if elem.is_some() {
+            self.edited.insert(id);
+        }
+        elem
+    }
+
+    /// Mount a power outlet on a wall face; `facing` points from the face into the room.
+    pub fn insert_outlet(
+        &mut self,
+        host_wall_id: ElementId,
+        position: sketchcad_core::Point2D,
+        facing: sketchcad_core::Vector2D,
+        standard: crate::PlugStandard,
+        voltage: crate::OutletVoltage,
+        gangs: u8,
+    ) -> Option<ElementId> {
+        self.get_wall(host_wall_id)?;
+        let id = self.add_element(Outlet::new(host_wall_id, position, facing, standard, voltage, gangs));
+        self.sync();
+        Some(id)
     }
 
     /// Insert an architectural Room Space / Zone
@@ -810,6 +851,135 @@ impl BimDocument {
         self.elements.len()
     }
 
+    /// Physical material of an element, for kinds that carry one.
+    pub fn element_material(&self, id: ElementId) -> Option<&Material> {
+        if let Some(e) = self.get_wall(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_column(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_slab(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_ceiling(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_beam(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_stairs(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_door(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_window(id) {
+            Some(&e.frame_material)
+        } else if let Some(e) = self.get_railing(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_roof(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_ramp(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_curtain_wall(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_mullion(id) {
+            Some(&e.material)
+        } else if let Some(e) = self.get_space(id) {
+            Some(&e.floor_material)
+        } else if let Some(e) = self.get_furniture(id) {
+            Some(&e.material)
+        } else {
+            None
+        }
+    }
+
+    /// Replaces an element's physical material (density / cost / QTO). Returns false for
+    /// kinds without one. A painted element is repainted so its colour follows the material.
+    pub fn set_element_material(&mut self, id: ElementId, material: Material) -> bool {
+        self.touch();
+        if self.painted.contains_key(&id) {
+            self.painted.insert(id, material.clone());
+        }
+        let Some(elem) = self.elements.get_mut(&id) else {
+            return false;
+        };
+        let any = elem.as_any_mut();
+        macro_rules! slot {
+            ($($ty:ty => $field:ident),+ $(,)?) => {
+                $(if any.is::<$ty>() {
+                    &mut any.downcast_mut::<$ty>().expect("type checked").$field
+                } else)+ {
+                    return false;
+                }
+            };
+        }
+        let slot = slot!(
+            Wall => material, Column => material, Slab => material, Ceiling => material,
+            Beam => material, Stairs => material, Door => material, Window => frame_material,
+            Railing => material, Roof => material, Ramp => material, CurtainWall => material,
+            Mullion => material, Space => floor_material, Furniture => material,
+        );
+        *slot = material;
+        self.dependency_graph.mark_dirty(id);
+        self.events.push(ChangeEvent::ElementModified(id));
+        true
+    }
+
+    /// Paint bucket (油漆桶): applies `material` to the element's surfaces. The colour shows
+    /// in the 3D view and colour exports; the element's physical material is replaced too
+    /// when it has one. Returns false if the element does not exist.
+    pub fn paint_element(&mut self, id: ElementId, material: Material) -> bool {
+        if !self.elements.contains_key(&id) {
+            return false;
+        }
+        self.painted.insert(id, material.clone());
+        self.set_element_material(id, material);
+        true
+    }
+
+    /// Removes the paint, restoring the element's default display colour.
+    pub fn clear_paint(&mut self, id: ElementId) -> bool {
+        self.touch();
+        self.painted.remove(&id).is_some()
+    }
+
+    /// Paint applied to an element with [`Self::paint_element`].
+    pub fn paint_of(&self, id: ElementId) -> Option<&Material> {
+        self.painted.get(&id)
+    }
+
+    /// Display colour override of an element: its paint, else its source-model colour.
+    /// `None` means the viewer's palette colour for the element kind.
+    pub fn display_rgba(&self, id: ElementId) -> Option<[u8; 4]> {
+        self.painted
+            .get(&id)
+            .map(Material::rgba)
+            .or_else(|| self.get_element(id).and_then(|e| e.display_color()))
+    }
+
+    /// Built-in presets followed by the user's custom materials.
+    pub fn material_library(&self) -> Vec<Material> {
+        let mut library = Material::presets();
+        library.extend(self.custom_materials.iter().cloned());
+        library
+    }
+
+    pub fn custom_materials(&self) -> &[Material] {
+        &self.custom_materials
+    }
+
+    /// Adds a material to the document's library, replacing a custom one of the same name.
+    pub fn add_custom_material(&mut self, material: Material) {
+        self.touch();
+        match self.custom_materials.iter_mut().find(|m| m.name == material.name) {
+            Some(existing) => *existing = material,
+            None => self.custom_materials.push(material),
+        }
+    }
+
+    /// Removes a custom material from the library; elements already painted with it keep it.
+    pub fn remove_custom_material(&mut self, name: &str) -> bool {
+        self.touch();
+        let before = self.custom_materials.len();
+        self.custom_materials.retain(|m| m.name != name);
+        self.custom_materials.len() != before
+    }
+
     pub fn get_elements_by_kind(&self, kind: ElementKind) -> Vec<&dyn BimElement> {
         self.elements
             .values()
@@ -836,6 +1006,12 @@ impl BimDocument {
             elements: serializable_elements,
             hidden_elements: self.hidden_elements.clone(),
             storeys: self.storeys.clone(),
+            custom_materials: self.custom_materials.clone(),
+            painted: self
+                .painted
+                .iter()
+                .map(|(id, material)| PaintedElement { element: *id, material: material.clone() })
+                .collect(),
         }
     }
 
@@ -846,6 +1022,13 @@ impl BimDocument {
             doc.add_boxed_element(ser_elem.into_boxed_element());
         }
         doc.hidden_elements = project.hidden_elements;
+        doc.custom_materials = project.custom_materials;
+        doc.painted = project
+            .painted
+            .into_iter()
+            .filter(|p| doc.elements.contains_key(&p.element))
+            .map(|p| (p.element, p.material))
+            .collect();
         doc.set_storeys(project.storeys);
         doc.sync();
         doc
@@ -986,6 +1169,67 @@ mod tests {
         assert_eq!(loaded_doc.element_count(), doc.element_count());
         assert_eq!(loaded_doc.name, doc.name);
         let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn paint_bucket_applies_material_and_survives_paste_and_save() {
+        use sketchcad_geom::Color;
+
+        let mut doc = BimDocument::new("Paint");
+        let wall_id = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(4000.0, 0.0), 200.0, 3000.0, Material::concrete()));
+        assert_eq!(doc.display_rgba(wall_id), None, "unpainted walls use the palette colour");
+
+        let sage = Material::custom("Sage Paint 灰綠漆", Color::rgb(140, 160, 130));
+        doc.add_custom_material(sage.clone());
+        assert_eq!(doc.material_library().last(), Some(&sage));
+
+        assert!(doc.paint_element(wall_id, sage.clone()));
+        assert_eq!(doc.display_rgba(wall_id), Some([140, 160, 130, 255]));
+        assert_eq!(doc.element_material(wall_id), Some(&sage), "physical material follows the paint");
+
+        // Choosing another material for a painted element repaints it
+        assert!(doc.set_element_material(wall_id, Material::brick()));
+        assert_eq!(doc.paint_of(wall_id), Some(&Material::brick()));
+        doc.paint_element(wall_id, sage.clone());
+
+        let copy_src = doc.get_element(wall_id).unwrap().clone_box();
+        let copy_id = doc.paste_element(copy_src.as_ref(), sketchcad_core::Vector3D::new(0.0, 1000.0, 0.0));
+        assert_eq!(doc.paint_of(copy_id), Some(&sage));
+
+        let loaded = BimDocument::from_project(doc.to_project());
+        assert_eq!(loaded.paint_of(wall_id), Some(&sage));
+        assert_eq!(loaded.custom_materials(), &[sage.clone()]);
+
+        assert!(doc.clear_paint(wall_id));
+        assert_eq!(doc.display_rgba(wall_id), None);
+        doc.remove_element(copy_id);
+        assert_eq!(doc.paint_of(copy_id), None);
+    }
+
+    #[test]
+    fn outlets_and_av_equipment_round_trip() {
+        use crate::{FurnitureKind, OutletVoltage, PlugStandard};
+        use sketchcad_core::Vector2D;
+
+        let mut doc = BimDocument::new("AV");
+        let wall_id = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(4000.0, 0.0), 200.0, 3000.0, Material::concrete()));
+        let outlet_id = doc
+            .insert_outlet(wall_id, Point2D::new(1000.0, 100.0), Vector2D::Y, PlugStandard::Eu, OutletVoltage::V220, 1)
+            .expect("outlet on wall");
+        assert!(doc.insert_outlet(ElementId::new(), Point2D::ZERO, Vector2D::Y, PlugStandard::Us, OutletVoltage::V110, 2).is_none(), "needs a host wall");
+
+        let tv_id = doc.insert_furniture(FurnitureKind::Television, Point2D::new(2000.0, 500.0), 0.0, 0.0, FurnitureKind::Television.default_material());
+        let tv = doc.get_element(tv_id).unwrap();
+        assert_eq!(tv.display_color(), Some(Material::black_aluminum().rgba()), "electronics use their material colour");
+        let mesh = tv.to_3d_mesh();
+        assert!(mesh.face_colors.iter().any(Option::is_some), "screen has its own colour");
+        assert!(mesh.face_colors.iter().any(Option::is_none), "bezel takes the element colour");
+
+        let loaded = BimDocument::from_project(doc.to_project());
+        let outlet = loaded.get_outlet(outlet_id).expect("outlet survives save / load");
+        assert_eq!((outlet.standard, outlet.voltage, outlet.gangs), (PlugStandard::Eu, OutletVoltage::V220, 1));
+        assert_eq!(loaded.get_furniture(tv_id).map(|f| f.kind), Some(FurnitureKind::Television));
+        assert!(loaded.generate_master_qto().total_cost() > 0.0);
     }
 }
 

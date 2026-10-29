@@ -67,6 +67,7 @@ pub fn kind_display_name(kind: ElementKind) -> &'static str {
         ElementKind::Space => "空間區域",
         ElementKind::Furniture => "室內家具",
         ElementKind::LightFixture => "照明燈具",
+        ElementKind::Outlet => "電源插座",
     }
 }
 
@@ -223,7 +224,7 @@ fn render_hierarchy_tree(
             state,
             "furnishing",
             "🛋️ 室內空間與軟裝照明 (Space, FF&E & Lighting)",
-            &[ElementKind::Space, ElementKind::Furniture, ElementKind::LightFixture],
+            &[ElementKind::Space, ElementKind::Furniture, ElementKind::LightFixture, ElementKind::Outlet],
         );
 
     });
@@ -454,6 +455,16 @@ fn render_element_tree_node(
                             needs_sync = true;
                         }
                     });
+                    let mut frame_choice = None;
+                    egui::Grid::new(format!("win_opts_{:?}", id)).num_columns(2).show(ui, |ui| {
+                        if window_options_ui(ui, win, &mut frame_choice) {
+                            needs_sync = true;
+                        }
+                    });
+                    if let Some(frame) = frame_choice {
+                        doc.set_element_material(id, frame);
+                        needs_sync = true;
+                    }
                 } else if let Some(railing) = doc.get_railing_mut(id) {
                     ui.horizontal(|ui| {
                         ui.label("高度:");
@@ -522,13 +533,17 @@ fn render_element_tree_node(
                 } else if let Some(f) = doc.get_furniture_mut(id) {
                     ui.horizontal(|ui| {
                         ui.label("尺寸:");
-                        if ui.add(egui::DragValue::new(&mut f.width).speed(20.0).range(300.0..=5000.0).prefix("W:").suffix("mm")).changed() {
+                        if ui.add(egui::DragValue::new(&mut f.width).speed(20.0).range(150.0..=5000.0).prefix("W:").suffix("mm")).changed() {
                             needs_sync = true;
                         }
-                        if ui.add(egui::DragValue::new(&mut f.depth).speed(20.0).range(300.0..=3000.0).prefix("D:").suffix("mm")).changed() {
+                        if ui.add(egui::DragValue::new(&mut f.depth).speed(20.0).range(150.0..=3000.0).prefix("D:").suffix("mm")).changed() {
                             needs_sync = true;
                         }
                     });
+                } else if let Some(o) = doc.get_outlet_mut(id) {
+                    if outlet_spec_ui(ui, o) {
+                        needs_sync = true;
+                    }
                 } else if let Some(l) = doc.get_light_fixture_mut(id) {
                     ui.horizontal(|ui| {
                         ui.label("光通量:");
@@ -738,7 +753,7 @@ fn render_vs_property_grid(
 
         // Render Property Table for the selected element
         if let Some(id) = *selected_id {
-            render_selected_element_properties(ui, doc, id, state);
+            render_selected_element_properties(ui, doc, undo_stack, id, state);
         } else {
             ui.label(egui::RichText::new("請先點選畫面上或樹狀總管中的構件以顯示屬性。").italics().color(egui::Color32::from_rgb(150, 160, 175)));
         }
@@ -754,6 +769,7 @@ fn render_vs_property_grid(
 fn render_selected_element_properties(
     ui: &mut Ui,
     doc: &mut BimDocument,
+    undo_stack: &mut Vec<BimDocument>,
     id: ElementId,
     state: &mut InspectorState,
 ) {
@@ -905,6 +921,18 @@ fn render_selected_element_properties(
                         needs_sync = true;
                     }
                 });
+                let mut frame_choice = None;
+                vs_property_row(ui, "窗型與材質 (Type)", "開窗型式、窗框材質與玻璃種類；油漆桶上色只會改變窗框顏色。", state, |ui| {
+                    egui::Grid::new(format!("win_grid_opts_{:?}", id)).num_columns(2).show(ui, |ui| {
+                        if window_options_ui(ui, win, &mut frame_choice) {
+                            needs_sync = true;
+                        }
+                    });
+                });
+                if let Some(frame) = frame_choice {
+                    doc.set_element_material(id, frame);
+                    needs_sync = true;
+                }
             } else if let Some(railing) = doc.get_railing_mut(id) {
                 vs_property_row(ui, "扶手高度 (Height)", "地面或梯級面至扶手頂緣之垂直高度 (mm)，法定標準 1100mm。", state, |ui| {
                     if ui.add(egui::DragValue::new(&mut railing.height).speed(10.0).range(600.0..=2000.0).suffix(" mm")).changed() {
@@ -1070,23 +1098,18 @@ fn render_selected_element_properties(
                     ui.label(format!("{:.2} m³", sp.volume_m3()));
                 });
             } else if let Some(f) = doc.get_furniture_mut(id) {
-                vs_property_row(ui, "家具類型 (Furniture Kind)", "家具與設備規格分類 (沙發、雙人床、餐桌椅、廚具水槽、馬桶衛浴、衣櫃、工作書桌)。", state, |ui| {
+                vs_property_row(ui, "家具類型 (Furniture Kind)", "家具與設備規格分類 (沙發、雙人床、餐桌椅、廚具水槽、馬桶衛浴、衣櫃、工作書桌、電視、音響組、落地喇叭)；切換類型會套用該類型的標準尺寸與材質。", state, |ui| {
                     let current_k = f.kind;
                     egui::ComboBox::from_id_salt(format!("furn_kind_{:?}", id))
                         .selected_text(current_k.display_name())
                         .show_ui(ui, |ui| {
-                            for k in &[
-                                FurnitureKind::Sofa,
-                                FurnitureKind::Bed,
-                                FurnitureKind::DiningTable,
-                                FurnitureKind::KitchenCabinet,
-                                FurnitureKind::Toilet,
-                                FurnitureKind::Wardrobe,
-                                FurnitureKind::Desk,
-                            ] {
+                            for k in &FurnitureKind::ALL {
                                 if ui.selectable_label(current_k == *k, k.display_name()).clicked() {
+                                    // A different kind starts from its standard size and material
                                     f.kind = *k;
                                     f.name = k.display_name().to_string();
+                                    (f.width, f.depth, f.height) = k.default_dimensions();
+                                    f.material = k.default_material();
                                     needs_sync = true;
                                 }
                             }
@@ -1114,6 +1137,19 @@ fn render_selected_element_properties(
                 });
                 vs_property_row(ui, "參考單價 (Cost)", "FF&E 軟裝採購與組裝標準造價 (TWD)。", state, |ui| {
                     ui.label(format!("NT$ {:.0}", f.kind.default_cost()));
+                });
+            } else if let Some(o) = doc.get_outlet_mut(id) {
+                vs_property_row(ui, "插座規格 (Outlet Spec)", "插座規格 (美規 NEMA / 歐規 Schuko)、迴路電壓 (110V / 220V) 與插孔數；變更後自動更新名稱與單價。", state, |ui| {
+                    ui.vertical(|ui| {
+                        if outlet_spec_ui(ui, o) {
+                            needs_sync = true;
+                        }
+                    });
+                });
+                vs_property_row(ui, "單價 (Unit Price)", "插座含配管配線與面板安裝之每組單價 (TWD)。", state, |ui| {
+                    if ui.add(egui::DragValue::new(&mut o.unit_price).speed(10.0).range(0.0..=20000.0).prefix("TWD ")).changed() {
+                        needs_sync = true;
+                    }
                 });
             } else if let Some(l) = doc.get_light_fixture_mut(id) {
                 vs_property_row(ui, "燈具類型 (Luminaire Type)", "室內照明燈具型式 (嵌燈、吊燈、軌道燈、吸頂燈、燈帶)。", state, |ui| {
@@ -1223,55 +1259,10 @@ fn render_selected_element_properties(
             // Section 3: 材料與物理規範 (Materials & Engineering)
             render_category_header(ui, "材料與物理規範 (Materials)");
 
-            let mut current_mat_name = "自訂材料".to_string();
-            let mut current_density = 2400.0;
-            let mut current_cost_m3 = 3200.0;
-
-            if let Some(wall) = doc.get_wall(id) {
-                current_mat_name = wall.material.name.clone();
-                current_density = wall.material.density_kg_m3;
-                current_cost_m3 = wall.material.cost_per_m3;
-            } else if let Some(col) = doc.get_column(id) {
-                current_mat_name = col.material.name.clone();
-                current_density = col.material.density_kg_m3;
-                current_cost_m3 = col.material.cost_per_m3;
-            } else if let Some(slab) = doc.get_slab(id) {
-                current_mat_name = slab.material.name.clone();
-                current_density = slab.material.density_kg_m3;
-                current_cost_m3 = slab.material.cost_per_m3;
-            } else if let Some(ceil) = doc.get_ceiling(id) {
-                current_mat_name = ceil.material.name.clone();
-                current_density = ceil.material.density_kg_m3;
-                current_cost_m3 = ceil.material.cost_per_m3;
-            } else if let Some(railing) = doc.get_railing(id) {
-                current_mat_name = railing.material.name.clone();
-                current_density = railing.material.density_kg_m3;
-                current_cost_m3 = railing.material.cost_per_m3;
-            } else if let Some(roof) = doc.get_roof(id) {
-                current_mat_name = roof.material.name.clone();
-                current_density = roof.material.density_kg_m3;
-                current_cost_m3 = roof.material.cost_per_m3;
-            } else if let Some(ramp) = doc.get_ramp(id) {
-                current_mat_name = ramp.material.name.clone();
-                current_density = ramp.material.density_kg_m3;
-                current_cost_m3 = ramp.material.cost_per_m3;
-            } else if let Some(cw) = doc.get_curtain_wall(id) {
-                current_mat_name = cw.material.name.clone();
-                current_density = cw.material.density_kg_m3;
-                current_cost_m3 = cw.material.cost_per_m3;
-            } else if let Some(mul) = doc.get_mullion(id) {
-                current_mat_name = mul.material.name.clone();
-                current_density = mul.material.density_kg_m3;
-                current_cost_m3 = mul.material.cost_per_m3;
-            } else if let Some(sp) = doc.get_space(id) {
-                current_mat_name = sp.floor_material.name.clone();
-                current_density = sp.floor_material.density_kg_m3;
-                current_cost_m3 = sp.floor_material.cost_per_m3;
-            } else if let Some(f) = doc.get_furniture(id) {
-                current_mat_name = f.material.name.clone();
-                current_density = f.material.density_kg_m3;
-                current_cost_m3 = f.material.cost_per_m3;
-            }
+            let (current_mat_name, current_density, current_cost_m3) = match doc.element_material(id) {
+                Some(m) => (m.name.clone(), m.density_kg_m3, m.cost_per_m3),
+                None => ("自訂材料".to_string(), 2400.0, 3200.0),
+            };
 
             let materials_presets = [
                 ("鋼筋混凝土 (Concrete)", Material::concrete()),
@@ -1298,41 +1289,40 @@ fn render_selected_element_properties(
                                 selected_preset_mat = Some(mat.clone());
                             }
                         }
+                        if !doc.custom_materials().is_empty() {
+                            ui.separator();
+                            for mat in doc.custom_materials() {
+                                if ui.selectable_label(current_mat_name == mat.name, format!("🎨 {}", mat.name)).clicked() {
+                                    selected_preset_mat = Some(mat.clone());
+                                }
+                            }
+                        }
                     });
             });
 
-            if let Some(new_mat) = selected_preset_mat {
-                if let Some(wall) = doc.get_wall_mut(id) {
-                    wall.material = new_mat;
-                } else if let Some(col) = doc.get_column_mut(id) {
-                    col.material = new_mat;
-                } else if let Some(slab) = doc.get_slab_mut(id) {
-                    slab.material = new_mat;
-                } else if let Some(ceil) = doc.get_ceiling_mut(id) {
-                    ceil.material = new_mat;
-                } else if let Some(beam) = doc.get_beam_mut(id) {
-                    beam.material = new_mat;
-                } else if let Some(stair) = doc.get_stairs_mut(id) {
-                    stair.material = new_mat;
-                } else if let Some(door) = doc.get_door_mut(id) {
-                    door.material = new_mat;
-                } else if let Some(win) = doc.get_window_mut(id) {
-                    win.material = new_mat;
-                } else if let Some(railing) = doc.get_railing_mut(id) {
-                    railing.material = new_mat;
-                } else if let Some(roof) = doc.get_roof_mut(id) {
-                    roof.material = new_mat;
-                } else if let Some(ramp) = doc.get_ramp_mut(id) {
-                    ramp.material = new_mat;
-                } else if let Some(cw) = doc.get_curtain_wall_mut(id) {
-                    cw.material = new_mat;
-                } else if let Some(mul) = doc.get_mullion_mut(id) {
-                    mul.material = new_mat;
-                } else if let Some(sp) = doc.get_space_mut(id) {
-                    sp.floor_material = new_mat;
-                } else if let Some(f) = doc.get_furniture_mut(id) {
-                    f.material = new_mat;
+            let mut clear_paint = false;
+            vs_property_row(ui, "表面塗裝 (Paint)", "以油漆桶 [K] 貼附於構件表面之材質顏色，會顯示於 3D 視圖與 SketchUp 匯出。", state, |ui| {
+                match doc.paint_of(id) {
+                    Some(paint) => {
+                        crate::gui::app::material_swatch(ui, paint, false);
+                        ui.label(&paint.name);
+                        if ui.small_button("清除").on_hover_text("移除塗裝，恢復預設顯示顏色").clicked() {
+                            clear_paint = true;
+                        }
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("未塗裝 (預設顏色)").weak());
+                    }
                 }
+            });
+            if clear_paint {
+                push_undo(undo_stack, doc);
+                doc.clear_paint(id);
+            }
+
+            if let Some(new_mat) = selected_preset_mat {
+                push_undo(undo_stack, doc);
+                doc.set_element_material(id, new_mat);
                 needs_sync = true;
             }
 
@@ -1366,6 +1356,76 @@ fn render_selected_element_properties(
     if needs_sync {
         doc.sync();
     }
+}
+
+/// Outlet standard / voltage / gang selectors and mounting height. Returns true on change.
+fn outlet_spec_ui(ui: &mut Ui, o: &mut sketchcad_bim::Outlet) -> bool {
+    let mut spec_changed = false;
+    ui.horizontal_wrapped(|ui| {
+        for standard in sketchcad_bim::PlugStandard::ALL {
+            spec_changed |= ui.selectable_value(&mut o.standard, standard, standard.label()).changed();
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        for voltage in sketchcad_bim::OutletVoltage::ALL {
+            spec_changed |= ui.selectable_value(&mut o.voltage, voltage, voltage.label()).changed();
+        }
+        ui.separator();
+        spec_changed |= ui.selectable_value(&mut o.gangs, 1, "單插").changed();
+        spec_changed |= ui.selectable_value(&mut o.gangs, 2, "雙插").changed();
+    });
+    if spec_changed {
+        o.refresh_spec();
+    }
+    let height_changed = ui
+        .horizontal(|ui| {
+            ui.label("離地高度:");
+            ui.add(egui::DragValue::new(&mut o.mount_height).speed(10.0).range(100.0..=2200.0).suffix(" mm")).changed()
+        })
+        .inner;
+    spec_changed || height_changed
+}
+
+/// Window type (窗型), frame (窗框) and glazing (玻璃) pickers laid out as grid rows.
+/// Type and glazing are edited in place (returns true on change); a new frame material is
+/// returned through `frame_choice` so the caller can apply it via the document (keeps paint in step).
+fn window_options_ui(ui: &mut Ui, win: &mut sketchcad_bim::Window, frame_choice: &mut Option<Material>) -> bool {
+    let mut changed = false;
+    ui.label("窗型:");
+    egui::ComboBox::from_id_salt(("win_type", win.id))
+        .selected_text(win.window_type.label())
+        .show_ui(ui, |ui| {
+            for t in sketchcad_bim::WindowType::ALL {
+                changed |= ui.selectable_value(&mut win.window_type, t, t.label()).changed();
+            }
+        });
+    ui.end_row();
+
+    ui.label("窗框:");
+    egui::ComboBox::from_id_salt(("win_frame", win.id))
+        .selected_text(&win.frame_material.name)
+        .show_ui(ui, |ui| {
+            for m in Material::window_frames() {
+                if ui.selectable_label(win.frame_material.name == m.name, &m.name).clicked() {
+                    *frame_choice = Some(m);
+                }
+            }
+        });
+    ui.end_row();
+
+    ui.label("玻璃:");
+    egui::ComboBox::from_id_salt(("win_glass", win.id))
+        .selected_text(&win.glazing.name)
+        .show_ui(ui, |ui| {
+            for m in Material::glazings() {
+                if ui.selectable_label(win.glazing.name == m.name, &m.name).clicked() {
+                    win.glazing = m;
+                    changed = true;
+                }
+            }
+        });
+    ui.end_row();
+    changed
 }
 
 /// Visual Studio Category Header

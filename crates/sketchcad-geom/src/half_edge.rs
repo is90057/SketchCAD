@@ -9,6 +9,10 @@ pub struct TriangleMesh {
     pub indices: Vec<u32>,
     #[serde(default)]
     pub edge_flags: Vec<[bool; 3]>,
+    /// Optional per-triangle sRGBA colour overriding the element colour (e.g. window glass
+    /// in a painted frame). Empty when no triangle has one; otherwise one entry per triangle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub face_colors: Vec<Option<[u8; 4]>>,
 }
 
 impl TriangleMesh {
@@ -33,10 +37,26 @@ impl TriangleMesh {
         let base_index = self.positions.len() as u32;
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
+        let own_triangles = self.triangle_count();
         for &idx in &other.indices {
             self.indices.push(base_index + idx);
         }
         self.edge_flags.extend_from_slice(&other.edge_flags);
+        if !self.face_colors.is_empty() || !other.face_colors.is_empty() {
+            self.face_colors.resize(own_triangles, None);
+            self.face_colors.extend_from_slice(&other.face_colors);
+            self.face_colors.resize(self.triangle_count(), None);
+        }
+    }
+
+    /// Colour override of triangle `i`, if any.
+    pub fn face_color(&self, i: usize) -> Option<[u8; 4]> {
+        self.face_colors.get(i).copied().flatten()
+    }
+
+    /// Gives every triangle of this mesh the colour override `rgba`.
+    pub fn set_color(&mut self, rgba: [u8; 4]) {
+        self.face_colors = vec![Some(rgba); self.triangle_count()];
     }
 
     /// Computes feature crease edges by inspecting dihedral angles between adjacent triangles.
@@ -318,5 +338,29 @@ mod tests {
         }
         assert_eq!(false_count, 12, "All 6 internal quad diagonals must be false");
         assert_eq!(true_count, 24, "All 12 sharp 90-degree box edges must be true");
+    }
+}
+
+#[cfg(test)]
+mod face_color_tests {
+    use super::*;
+
+    #[test]
+    fn append_keeps_face_colours_aligned_with_triangles() {
+        let plain = TriangleMesh::create_box(Vector3D::new(1.0, 1.0, 1.0), Point3D::ZERO);
+        let mut glass = plain.clone();
+        glass.set_color([1, 2, 3, 4]);
+
+        let mut mesh = plain.clone();
+        mesh.append(&glass);
+        mesh.append(&plain);
+        assert_eq!(mesh.face_colors.len(), 36);
+        assert_eq!(mesh.face_color(0), None);
+        assert_eq!(mesh.face_color(12), Some([1, 2, 3, 4]));
+        assert_eq!(mesh.face_color(35), None);
+
+        let mut uncoloured = plain.clone();
+        uncoloured.append(&plain);
+        assert!(uncoloured.face_colors.is_empty());
     }
 }

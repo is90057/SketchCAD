@@ -14,9 +14,41 @@ pub enum FurnitureKind {
     Toilet,         // 衛浴單體馬桶與水箱
     Wardrobe,       // 臥室大容量收納衣櫃
     Desk,           // 書房辦公書桌椅組
+    Television,     // 液晶電視 (含座架)
+    AudioSystem,    // 影音櫃與 AV 擴大機音響組
+    Speaker,        // 落地式喇叭
 }
 
 impl FurnitureKind {
+    pub const ALL: [FurnitureKind; 10] = [
+        FurnitureKind::Sofa,
+        FurnitureKind::Bed,
+        FurnitureKind::DiningTable,
+        FurnitureKind::KitchenCabinet,
+        FurnitureKind::Toilet,
+        FurnitureKind::Wardrobe,
+        FurnitureKind::Desk,
+        FurnitureKind::Television,
+        FurnitureKind::AudioSystem,
+        FurnitureKind::Speaker,
+    ];
+
+    /// Audio-visual equipment, drawn in its material colour rather than the furniture palette.
+    pub fn is_electronics(&self) -> bool {
+        matches!(self, FurnitureKind::Television | FurnitureKind::AudioSystem | FurnitureKind::Speaker)
+    }
+
+    /// Material a newly placed piece gets.
+    pub fn default_material(&self) -> Material {
+        match self {
+            FurnitureKind::Bed | FurnitureKind::Sofa => Material::fabric(),
+            FurnitureKind::KitchenCabinet => Material::marble(),
+            FurnitureKind::Toilet => Material::polished_tile(),
+            FurnitureKind::Television => Material::black_aluminum(),
+            _ => Material::walnut(),
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             FurnitureKind::Bed => "雙人床組 (Double Bed)",
@@ -26,6 +58,9 @@ impl FurnitureKind {
             FurnitureKind::Toilet => "衛浴馬桶 (Toilet Fixture)",
             FurnitureKind::Wardrobe => "收納大衣櫃 (Wardrobe Cabinet)",
             FurnitureKind::Desk => "書房書桌椅 (Study Desk)",
+            FurnitureKind::Television => "液晶電視 65吋 (Television)",
+            FurnitureKind::AudioSystem => "影音櫃音響組 (Audio System)",
+            FurnitureKind::Speaker => "落地喇叭 (Floor Speaker)",
         }
     }
 
@@ -39,6 +74,9 @@ impl FurnitureKind {
             FurnitureKind::Toilet => (500.0, 700.0, 780.0),
             FurnitureKind::Wardrobe => (1800.0, 600.0, 2400.0),
             FurnitureKind::Desk => (1400.0, 700.0, 750.0),
+            FurnitureKind::Television => (1450.0, 260.0, 900.0),
+            FurnitureKind::AudioSystem => (1800.0, 450.0, 600.0),
+            FurnitureKind::Speaker => (260.0, 320.0, 1050.0),
         }
     }
 
@@ -51,6 +89,9 @@ impl FurnitureKind {
             FurnitureKind::Toilet => 18000.0,
             FurnitureKind::Wardrobe => 48000.0,
             FurnitureKind::Desk => 16000.0,
+            FurnitureKind::Television => 38000.0,
+            FurnitureKind::AudioSystem => 45000.0,
+            FurnitureKind::Speaker => 18000.0,
         }
     }
 }
@@ -103,6 +144,64 @@ impl Furniture {
             self.position.x + dx * cos - dy * sin,
             self.position.y + dx * sin + dy * cos,
         )
+    }
+
+    /// Television, audio console and speaker geometry. The cabinet / bezel takes the element
+    /// colour (its material, paintable); screens, electronics and drivers keep their own.
+    fn av_equipment_mesh(&self, mesh: &mut TriangleMesh) {
+        const SCREEN: [u8; 4] = [16, 18, 24, 255];
+        const ELECTRONICS: [u8; 4] = [38, 40, 44, 255];
+        const DISPLAY_GLOW: [u8; 4] = [90, 205, 255, 255];
+        const DRIVER: [u8; 4] = [62, 64, 68, 255];
+        let (w, d, h) = (self.width, self.depth, self.height);
+        let (hw, hd) = (w * 0.5, d * 0.5);
+        let mut part = |center: Point3D, size: Vector3D, color: Option<[u8; 4]>| {
+            let first = mesh.triangle_count();
+            add_oriented_box(mesh, center, size, self.position, self.base_z, self.rotation_deg);
+            if let Some(rgba) = color {
+                mesh.face_colors.resize(first, None);
+                mesh.face_colors.resize(mesh.triangle_count(), Some(rgba));
+            }
+        };
+        match self.kind {
+            FurnitureKind::Television => {
+                let panel_h = (h - 70.0).max(100.0);
+                part(Point3D::new(0.0, 0.0, 10.0), Vector3D::new(420.0_f64.min(w), d - 20.0, 20.0), None);
+                part(Point3D::new(0.0, 20.0, 80.0), Vector3D::new(80.0, 40.0, 120.0), None);
+                part(Point3D::new(0.0, -15.0, 70.0 + panel_h * 0.5), Vector3D::new(w, 45.0, panel_h), None);
+                part(Point3D::new(0.0, -39.5, 70.0 + panel_h * 0.5), Vector3D::new(w - 30.0, 4.0, panel_h - 30.0), Some(SCREEN));
+            }
+            FurnitureKind::AudioSystem => {
+                let console_h = (h - 180.0).max(150.0);
+                part(Point3D::new(0.0, 0.0, 40.0), Vector3D::new(w - 60.0, d - 60.0, 80.0), Some(ELECTRONICS));
+                part(Point3D::new(0.0, 0.0, 80.0 + (console_h - 80.0) * 0.5), Vector3D::new(w, d, console_h - 80.0), None);
+                // Door split line on the console front
+                part(Point3D::new(0.0, -hd - 1.0, 80.0 + (console_h - 80.0) * 0.5), Vector3D::new(4.0, 2.0, console_h - 100.0), Some(ELECTRONICS));
+                // AV receiver: chassis, display strip and volume knob
+                let rx = -hw + 300.0;
+                let rz = console_h + 80.0;
+                part(Point3D::new(rx, -20.0, rz), Vector3D::new(435.0, 380.0, 160.0), Some(ELECTRONICS));
+                part(Point3D::new(rx - 60.0, -211.0, rz + 20.0), Vector3D::new(200.0, 2.0, 30.0), Some(DISPLAY_GLOW));
+                part(Point3D::new(rx + 150.0, -215.0, rz), Vector3D::new(60.0, 10.0, 60.0), Some(DRIVER));
+            }
+            FurnitureKind::Speaker => {
+                let cab_h = (h - 40.0).max(200.0);
+                part(Point3D::new(0.0, 0.0, 20.0), Vector3D::new(w + 40.0, d + 40.0, 40.0), Some(ELECTRONICS));
+                part(Point3D::new(0.0, 0.0, 40.0 + cab_h * 0.5), Vector3D::new(w, d, cab_h), None);
+                part(Point3D::new(0.0, -hd - 3.0, 40.0 + cab_h * 0.5), Vector3D::new(w - 20.0, 6.0, cab_h - 60.0), Some(ELECTRONICS));
+                // Tweeter above two woofers on the baffle
+                let woofer = (w - 70.0).clamp(60.0, 190.0);
+                let top = 40.0 + cab_h;
+                part(Point3D::new(0.0, -hd - 8.0, top - 120.0), Vector3D::new(55.0, 6.0, 55.0), Some(DRIVER));
+                for k in 0..2 {
+                    let z = top - 300.0 - k as f64 * (woofer + 60.0);
+                    if z - woofer * 0.5 > 80.0 {
+                        part(Point3D::new(0.0, -hd - 8.0, z), Vector3D::new(woofer, 6.0, woofer), Some(DRIVER));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Four outer footprint corners in world space
@@ -207,6 +306,10 @@ impl BimElement for Furniture {
 
     fn kind(&self) -> ElementKind {
         ElementKind::Furniture
+    }
+
+    fn display_color(&self) -> Option<[u8; 4]> {
+        self.kind.is_electronics().then(|| self.material.rgba())
     }
 
     fn to_2d_primitives(&self) -> Vec<Polyline2D> {
@@ -424,6 +527,32 @@ impl BimElement for Furniture {
                     vertices: vec![ch1, ch2, ch3, ch4],
                     closed: true,
                 });
+            }
+            FurnitureKind::Television => {
+                // Slim panel (front edge toward -Y) above the pedestal foot
+                let panel = [(-hw, -40.0), (hw, -40.0), (hw, 10.0), (-hw, 10.0)];
+                prims.push(Polyline2D::new(panel.iter().map(|&(x, y)| self.local_to_world(x, y)).collect(), true));
+                let foot = [(-210.0, -hd + 10.0), (210.0, -hd + 10.0), (210.0, hd - 10.0), (-210.0, hd - 10.0)];
+                prims.push(Polyline2D::new(foot.iter().map(|&(x, y)| self.local_to_world(x, y)).collect(), true));
+            }
+            FurnitureKind::AudioSystem => {
+                // AV receiver on the left of the media console, with its front panel line
+                let rx = -hw + 300.0;
+                let rcv = [(rx - 218.0, -hd + 30.0), (rx + 218.0, -hd + 30.0), (rx + 218.0, hd - 70.0), (rx - 218.0, hd - 70.0)];
+                prims.push(Polyline2D::new(rcv.iter().map(|&(x, y)| self.local_to_world(x, y)).collect(), true));
+                prims.push(Polyline2D::new(vec![self.local_to_world(0.0, -hd), self.local_to_world(0.0, hd)], false));
+            }
+            FurnitureKind::Speaker => {
+                // Woofer cone seen from above near the front baffle
+                let r = (hw * 0.6).min(hd * 0.6);
+                let c = (0.0, -hd * 0.25);
+                let pts = (0..16)
+                    .map(|i| {
+                        let a = std::f64::consts::TAU * i as f64 / 16.0;
+                        self.local_to_world(c.0 + r * a.cos(), c.1 + r * a.sin())
+                    })
+                    .collect();
+                prims.push(Polyline2D::new(pts, true));
             }
         }
 
@@ -867,6 +996,9 @@ impl BimElement for Furniture {
                     Point3D::new(chair_x, chair_y - 200.0, 700.0),
                     Vector3D::new(430.0, 30.0, 460.0),
                 );
+            }
+            FurnitureKind::Television | FurnitureKind::AudioSystem | FurnitureKind::Speaker => {
+                self.av_equipment_mesh(&mut mesh);
             }
         }
 

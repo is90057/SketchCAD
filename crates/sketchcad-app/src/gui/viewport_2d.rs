@@ -2,7 +2,8 @@ use crate::gui::doc_watch::DocWatcher;
 use crate::gui::plan_sheets::{build_plan_set, LineStyle, PlanSet};
 use egui::{Color32, Pos2, Rect, Stroke, Ui};
 use sketchcad_bim::{
-    BimDocument, DoorSwing, ElementKind, FurnitureKind, LightType, SpaceType, Wall,
+    BimDocument, DoorSwing, ElementKind, FurnitureKind, LightType, Outlet, OutletVoltage, PlugStandard,
+    SpaceType, Wall, WindowType,
 };
 use sketchcad_core::{ElementId, Point2D, Vector2D};
 use sketchcad_render::Camera2D;
@@ -26,6 +27,10 @@ pub enum ToolMode {
     Space,
     Furniture,
     LightFixture,
+    /// Paint bucket (油漆桶): click an element to apply the active material
+    Paint,
+    /// Power outlet (插座) mounted on a wall face
+    Outlet,
 }
 
 pub struct Viewport2D {
@@ -42,6 +47,12 @@ pub struct Viewport2D {
     pub furniture_cycle_kind: FurnitureKind,
     pub furniture_rotation: f64,
     pub light_cycle_type: LightType,
+    /// Type given to windows placed with the Window tool
+    pub window_type: WindowType,
+    /// Spec given to outlets placed with the Outlet tool
+    pub outlet_standard: PlugStandard,
+    pub outlet_voltage: OutletVoltage,
+    pub outlet_gangs: u8,
     pub move_base_pt: Option<Point2D>,
     pub snap_grid_size: f64, // mm, e.g. 100.0
     pub snap_enabled: bool,
@@ -97,6 +108,10 @@ impl Viewport2D {
             furniture_cycle_kind: FurnitureKind::Sofa,
             furniture_rotation: 0.0,
             light_cycle_type: LightType::Downlight,
+            window_type: WindowType::default(),
+            outlet_standard: PlugStandard::default(),
+            outlet_voltage: OutletVoltage::default(),
+            outlet_gangs: 2,
             move_base_pt: None,
             snap_grid_size: 500.0,
             snap_enabled: true,
@@ -210,7 +225,8 @@ impl Viewport2D {
         current_tool: ToolMode,
         selected_id: &mut Option<ElementId>,
         status_msg: &mut String,
-    ) {
+    ) -> Option<ElementId> {
+        let mut clicked_element = None;
         let avail = ui.available_size();
         let size = egui::Vec2::new(avail.x.max(100.0), avail.y.max(100.0));
         let (response, painter) = ui.allocate_painter(
@@ -618,7 +634,7 @@ impl Viewport2D {
                             painter.text(
                                 label_pos,
                                 egui::Align2::CENTER_CENTER,
-                                "點擊於牆體放置窗戶 (1200x1400mm)",
+                                format!("點擊於牆體放置{} (1200x1400mm)", self.window_type.label()),
                                 egui::FontId::monospace(12.0),
                                 Color32::from_rgb(80, 200, 255),
                             );
@@ -634,8 +650,11 @@ impl Viewport2D {
                                     sketchcad_bim::Material::glass(),
                                     16000.0,
                                 ) {
+                                    if let Some(win) = doc.get_window_mut(win_id) {
+                                        win.window_type = self.window_type;
+                                    }
                                     *selected_id = Some(win_id);
-                                    *status_msg = format!("✔ 已於牆體建立窗戶 (1200x1400mm, 偏移: {:.0}mm)", offset);
+                                    *status_msg = format!("✔ 已於牆體建立{} (1200x1400mm, 偏移: {:.0}mm)", self.window_type.label(), offset);
                                 }
                             }
                         } else {
@@ -1236,12 +1255,7 @@ impl Viewport2D {
                 ToolMode::Furniture => {
                     let kind = self.furniture_cycle_kind;
                     let (fw, fd, _fh) = kind.default_dimensions();
-                    let default_mat = match kind {
-                        FurnitureKind::Bed | FurnitureKind::Sofa => sketchcad_bim::Material::fabric(),
-                        FurnitureKind::KitchenCabinet => sketchcad_bim::Material::marble(),
-                        FurnitureKind::Toilet => sketchcad_bim::Material::polished_tile(),
-                        _ => sketchcad_bim::Material::walnut(),
-                    };
+                    let default_mat = kind.default_material();
 
                     let rot = self.furniture_rotation;
                     let cos = rot.cos();
@@ -1384,8 +1398,66 @@ impl Viewport2D {
                         }
                     }
                 }
+                ToolMode::Outlet => {
+                    let wall_hit = find_closest_wall(doc, world_pt)
+                        .filter(|(_, dist, ..)| *dist <= 800.0)
+                        .and_then(|(wall_id, _, on_axis, dir, _)| {
+                            let wall = doc.get_wall(wall_id)?;
+                            // Mount on the wall face on the cursor's side
+                            let norm = Vector2D::new(-dir.y, dir.x);
+                            let side = if (world_pt - on_axis).dot(norm) >= 0.0 { 1.0 } else { -1.0 };
+                            Some((wall_id, on_axis + norm * (side * wall.thickness * 0.5), norm * side))
+                        });
+                    match wall_hit {
+                        Some((wall_id, face_pt, facing)) => {
+                            let preview = Outlet::new(wall_id, face_pt, facing, self.outlet_standard, self.outlet_voltage, self.outlet_gangs);
+                            for prim in sketchcad_bim::BimElement::to_2d_primitives(&preview) {
+                                let pts: Vec<Pos2> = prim.vertices.iter().map(|&p| to_screen(p)).collect();
+                                let stroke = Stroke::new(1.8, Color32::from_rgb(255, 170, 60));
+                                if prim.closed {
+                                    painter.add(egui::Shape::closed_line(pts, stroke));
+                                } else {
+                                    painter.add(egui::Shape::line(pts, stroke));
+                                }
+                            }
+                            painter.text(
+                                to_screen(face_pt + facing * 450.0),
+                                egui::Align2::CENTER_CENTER,
+                                format!("點擊安裝 {} (離地 300mm)", preview.name),
+                                egui::FontId::monospace(12.0),
+                                Color32::from_rgb(255, 190, 90),
+                            );
+                            if response.clicked() {
+                                push_undo(undo_stack, doc);
+                                if let Some(id) = doc.insert_outlet(wall_id, face_pt, facing, self.outlet_standard, self.outlet_voltage, self.outlet_gangs) {
+                                    *selected_id = Some(id);
+                                    *status_msg = format!("✔ 已安裝 {}", preview.name);
+                                }
+                            }
+                        }
+                        None => {
+                            painter.text(
+                                hover_pos,
+                                egui::Align2::LEFT_TOP,
+                                " [請移動至牆體旁以安裝插座]",
+                                egui::FontId::monospace(12.0),
+                                Color32::from_rgb(240, 180, 80),
+                            );
+                        }
+                    }
+                }
+                ToolMode::Paint => {
+                    // The app applies the material to the returned element
+                    if response.clicked() {
+                        clicked_element = self.pick_element(doc, hover_pos, world_pt, center);
+                        if clicked_element.is_some() {
+                            *selected_id = clicked_element;
+                        }
+                    }
+                }
             }
         }
+        clicked_element
     }
 
     /// Zooms to `new_zoom` keeping the world point under `pivot` (screen) fixed.
@@ -1423,7 +1495,7 @@ impl Viewport2D {
         current_tool: ToolMode,
     ) {
         let space_down = ui.input(|i| i.key_down(egui::Key::Space));
-        let left_pans = self.pan_mode || space_down || self.is_tiled() || current_tool == ToolMode::Select;
+        let left_pans = self.pan_mode || space_down || self.is_tiled() || matches!(current_tool, ToolMode::Select | ToolMode::Paint);
         let panning = response.dragged_by(egui::PointerButton::Middle)
             || response.dragged_by(egui::PointerButton::Secondary)
             || (left_pans && response.dragged_by(egui::PointerButton::Primary));
@@ -2084,6 +2156,16 @@ pub fn pick_closest_element(doc: &BimDocument, world_pt: Point2D) -> Option<Elem
             if d < min_dist {
                 min_dist = d;
                 closest_id = Some(f.id);
+            }
+        }
+    }
+
+    for outlet in doc.get_elements_by_kind(sketchcad_bim::ElementKind::Outlet) {
+        if let Some(o) = doc.get_outlet(outlet.id()) {
+            let d = world_pt.distance(o.position);
+            if d < min_dist {
+                min_dist = d;
+                closest_id = Some(o.id);
             }
         }
     }

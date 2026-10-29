@@ -22,6 +22,7 @@ pub enum ElementKind {
     Space,
     Furniture,
     LightFixture,
+    Outlet,
 }
 
 impl ElementKind {
@@ -46,6 +47,7 @@ impl ElementKind {
             ElementKind::Space => [200, 225, 240, 80], // Translucent floor finish plate
             ElementKind::Furniture => [165, 125, 85, 255], // Warm solid wood / upholstery
             ElementKind::LightFixture => [48, 52, 58, 255], // Luminaire hardware (chassis / trim)
+            ElementKind::Outlet => [246, 246, 242, 255], // Wiring-device cover plate
         }
     }
 }

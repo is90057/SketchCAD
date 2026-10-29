@@ -301,6 +301,7 @@ impl BimElement for LightFixture {
             normals,
             indices,
             edge_flags,
+            ..Default::default()
         }
     }
 

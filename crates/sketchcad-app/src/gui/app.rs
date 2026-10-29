@@ -7,7 +7,7 @@ use sketchcad_bim::{
     SpaceType, Wall, Window,
 };
 use sketchcad_core::{ElementId, Point2D, Point3D};
-use sketchcad_geom::OpeningVoid;
+use sketchcad_geom::{Color, OpeningVoid};
 use sketchcad_io::{BcfHandler, BcfTopic, DwgAdapter, DxfHandler, IfcExporter, IfcImporter, SkpExporter, SkpImporter};
 use crate::updater::{self, UpdateState, Updater};
 use std::path::Path;
@@ -63,6 +63,11 @@ pub struct SketchCadApp {
     pub export_bcf_desc: String,
     pub show_about: bool,
     pub updater: Updater,
+
+    // Paint bucket (油漆桶) state
+    pub paint_material: Material,
+    pub new_material_name: String,
+    pub new_material_color: egui::Color32,
 }
 
 impl SketchCadApp {
@@ -104,6 +109,9 @@ impl SketchCadApp {
             export_bcf_desc: "由 SketchCAD 桌面端匯出之協同審查議題".to_string(),
             show_about: false,
             updater,
+            paint_material: Material::brick(),
+            new_material_name: String::new(),
+            new_material_color: egui::Color32::from_rgb(120, 150, 130),
         }
     }
 
@@ -336,6 +344,24 @@ impl SketchCadApp {
 
     fn show_notify(&mut self, msg: impl Into<String>) {
         self.notification = Some((msg.into(), std::time::Instant::now()));
+    }
+
+    /// Paint-bucket click on an element: applies the active material, or with Alt held
+    /// samples the element's material as the new active one (吸取材質).
+    fn paint_click(&mut self, id: ElementId, sample: bool) {
+        let Some(elem_name) = self.doc.get_element(id).map(|e| e.name().to_string()) else {
+            return;
+        };
+        if sample {
+            if let Some(material) = self.doc.paint_of(id).or_else(|| self.doc.element_material(id)).cloned() {
+                self.show_notify(format!("🎨 已吸取材質: {}", material.name));
+                self.paint_material = material;
+            }
+            return;
+        }
+        self.save_undo_state();
+        self.doc.paint_element(id, self.paint_material.clone());
+        self.show_notify(format!("🎨 已將「{}」貼附至 {}", self.paint_material.name, elem_name));
     }
 
     pub fn save_undo_state(&mut self) {
@@ -664,6 +690,103 @@ impl SketchCadApp {
     }
 
     /// 「關於」視窗：產品名稱、版本編號與開發者
+    /// Floating material library of the paint bucket: pick the active material from the
+    /// presets and the document's custom materials, or add a new one.
+    fn render_material_panel(&mut self, ctx: &egui::Context) {
+        let library = self.doc.material_library();
+        let preset_count = library.len() - self.doc.custom_materials().len();
+        let mut chosen: Option<Material> = None;
+        let mut removed: Option<String> = None;
+        let mut added: Option<Material> = None;
+
+        egui::Window::new("🎨 材質庫 (Paint Bucket)")
+            .default_pos([90.0, 150.0])
+            .default_width(250.0)
+            .resizable(false)
+            .collapsible(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("目前材質:");
+                    material_swatch(ui, &self.paint_material, true);
+                    ui.label(egui::RichText::new(&self.paint_material.name).strong());
+                });
+                ui.label(
+                    egui::RichText::new("點擊視口中的構件即可貼附上色 · Alt + 點擊吸取材質")
+                        .small()
+                        .color(egui::Color32::from_rgb(160, 175, 195)),
+                );
+                ui.separator();
+
+                ui.label(egui::RichText::new("內建材質").small().strong());
+                ui.horizontal_wrapped(|ui| {
+                    for material in &library[..preset_count] {
+                        if material_swatch(ui, material, *material == self.paint_material).clicked() {
+                            chosen = Some(material.clone());
+                        }
+                    }
+                });
+
+                ui.label(egui::RichText::new("自訂材質").small().strong());
+                if preset_count == library.len() {
+                    ui.label(egui::RichText::new("尚無自訂材質，請於下方新增").small().weak());
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for material in &library[preset_count..] {
+                        let response = material_swatch(ui, material, *material == self.paint_material);
+                        if response.clicked() {
+                            chosen = Some(material.clone());
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button("🗑 從材質庫移除").clicked() {
+                                removed = Some(material.name.clone());
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                });
+
+                ui.separator();
+                ui.label(egui::RichText::new("＋ 新增材質").strong());
+                ui.horizontal(|ui| {
+                    ui.label("名稱:");
+                    ui.add(egui::TextEdit::singleline(&mut self.new_material_name).hint_text("例: 灰綠色乳膠漆").desired_width(150.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("顏色:");
+                    egui::color_picker::color_edit_button_srgba(
+                        ui,
+                        &mut self.new_material_color,
+                        egui::color_picker::Alpha::OnlyBlend,
+                    );
+                });
+                let name = self.new_material_name.trim();
+                if ui
+                    .add_enabled(!name.is_empty(), egui::Button::new("＋ 加入材質庫並選用"))
+                    .on_hover_text("同名的自訂材質會被更新")
+                    .clicked()
+                {
+                    let [r, g, b, a] = self.new_material_color.to_srgba_unmultiplied();
+                    added = Some(Material::custom(name, Color::rgba(r, g, b, a)));
+                }
+            });
+
+        if let Some(material) = added {
+            self.save_undo_state();
+            self.doc.add_custom_material(material.clone());
+            self.show_notify(format!("已新增材質: {}", material.name));
+            self.new_material_name.clear();
+            chosen = Some(material);
+        }
+        if let Some(name) = removed {
+            self.save_undo_state();
+            self.doc.remove_custom_material(&name);
+            self.show_notify(format!("已移除自訂材質: {}", name));
+        }
+        if let Some(material) = chosen {
+            self.paint_material = material;
+        }
+    }
+
     fn render_about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
         egui::Window::new("關於 SketchCAD")
@@ -1040,11 +1163,14 @@ impl eframe::App for SketchCadApp {
                 } else if i.key_pressed(egui::Key::T) {
                     self.tool_mode = ToolMode::Ceiling;
                     self.viewport_2d.ceiling_start_pt = None;
-                } else if i.key_pressed(egui::Key::R) {
+                } else if i.key_pressed(egui::Key::R) && self.tool_mode != ToolMode::Furniture {
+                    // In the Furniture tool R rotates the piece being placed instead
                     self.tool_mode = ToolMode::Stairs;
                     self.viewport_2d.stair_start_pt = None;
                 } else if i.key_pressed(egui::Key::P) {
                     self.tool_mode = ToolMode::PushPull;
+                } else if i.key_pressed(egui::Key::K) {
+                    self.tool_mode = ToolMode::Paint;
                 }
             });
         }
@@ -1283,6 +1409,11 @@ impl eframe::App for SketchCadApp {
                         "在 2D 平面點選起步點與到達點，建立 1:12 法定無障礙防滑坡道與爬升箭頭",
                     ),
                     (
+                        ToolMode::Paint,
+                        "油漆桶上色 (Paint Bucket) [K]",
+                        "從材質庫選定或新增材質，點擊 2D / 3D 視口中的構件即可直接貼附上色；按住 Alt 點擊可吸取構件材質",
+                    ),
+                    (
                         ToolMode::PushPull,
                         "幾何推拉 (Push-Pull) [P]",
                         "選擇任意 3D 封閉平面，沿其法向量方向進行互動拉伸建模",
@@ -1295,7 +1426,12 @@ impl eframe::App for SketchCadApp {
                     (
                         ToolMode::Furniture,
                         "室內家具 (Furniture) [軟裝設備]",
-                        "放置床組、沙發、餐桌椅、廚具水槽、衛浴馬桶、衣櫃與書桌 (按 R 鍵旋轉)",
+                        "放置床組、沙發、餐桌椅、廚具水槽、衛浴馬桶、衣櫃、書桌，以及電視、音響組與落地喇叭 (於工具列選擇品項，按 R 鍵旋轉)",
+                    ),
+                    (
+                        ToolMode::Outlet,
+                        "電源插座 (Outlet) [美規/歐規 · 110V/220V]",
+                        "移動至牆體旁點擊即安裝於該側牆面 (離地 300mm)；於工具列選擇美規 / 歐規、110V / 220V 與單插 / 雙插",
                     ),
                     (
                         ToolMode::LightFixture,
@@ -1318,6 +1454,45 @@ impl eframe::App for SketchCadApp {
                         self.viewport_2d.space_start_pt = None;
                         self.viewport_2d.move_base_pt = None;
                     }
+                }
+
+                if self.tool_mode == ToolMode::Furniture {
+                    ui.separator();
+                    egui::ComboBox::from_id_salt("place_furniture_kind")
+                        .selected_text(self.viewport_2d.furniture_cycle_kind.display_name())
+                        .show_ui(ui, |ui| {
+                            for k in sketchcad_bim::FurnitureKind::ALL {
+                                ui.selectable_value(&mut self.viewport_2d.furniture_cycle_kind, k, k.display_name());
+                            }
+                        })
+                        .response
+                        .on_hover_text("選擇要放置的家具或影音設備");
+                }
+                if self.tool_mode == ToolMode::Outlet {
+                    ui.separator();
+                    let vp = &mut self.viewport_2d;
+                    for standard in sketchcad_bim::PlugStandard::ALL {
+                        ui.selectable_value(&mut vp.outlet_standard, standard, standard.label());
+                    }
+                    ui.separator();
+                    for voltage in sketchcad_bim::OutletVoltage::ALL {
+                        ui.selectable_value(&mut vp.outlet_voltage, voltage, voltage.label());
+                    }
+                    ui.separator();
+                    ui.selectable_value(&mut vp.outlet_gangs, 1, "單插");
+                    ui.selectable_value(&mut vp.outlet_gangs, 2, "雙插");
+                }
+                if self.tool_mode == ToolMode::Window {
+                    ui.separator();
+                    egui::ComboBox::from_id_salt("place_window_type")
+                        .selected_text(self.viewport_2d.window_type.label())
+                        .show_ui(ui, |ui| {
+                            for t in sketchcad_bim::WindowType::ALL {
+                                ui.selectable_value(&mut self.viewport_2d.window_type, t, t.label());
+                            }
+                        })
+                        .response
+                        .on_hover_text("新放置窗戶的開窗型式；已放置的窗戶可於右側屬性面板變更窗型、窗框與玻璃");
                 }
 
                 ui.separator();
@@ -1475,6 +1650,8 @@ impl eframe::App for SketchCadApp {
                     }
                     ToolMode::Furniture => "_FURNITURE [在平面圖點擊以放置家具，按 R 鍵可旋轉 90° 方向]",
                     ToolMode::LightFixture => "_LIGHT [在平面圖點擊天花板位置以安裝照明燈具]",
+                    ToolMode::Paint => "_PAINT [點擊 2D / 3D 視口中的構件貼附目前材質；Alt + 點擊吸取材質]",
+                    ToolMode::Outlet => "_OUTLET [移動至牆體旁點擊，於滑鼠所在側牆面安裝電源插座]",
                 };
 
                 ui.label(cmd_prompt);
@@ -1612,6 +1789,7 @@ impl eframe::App for SketchCadApp {
         }
 
         // 5. Central Viewport(s)
+        let mut clicked_element = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             match self.layout {
                 ViewLayout::Split2D3D => {
@@ -1619,40 +1797,48 @@ impl eframe::App for SketchCadApp {
                         // Left: 2D Engineering Viewport
                         cols[0].vertical(|ui| {
                             ui.label(egui::RichText::new("2D 平面工程繪圖視口 (XY 基準層)").strong());
-                            self.viewport_2d.render(
+                            clicked_element = clicked_element.or(self.viewport_2d.render(
                                 ui,
                                 &mut self.doc,
                                 &mut self.undo_stack,
                                 self.tool_mode,
                                 &mut self.selected_id,
                                 &mut self.status_text,
-                            );
+                            ));
                         });
 
                         // Right: 3D Spatial Model Viewport
                         cols[1].vertical(|ui| {
                             ui.label(egui::RichText::new("3D 空間實體模型視口 (環繞軌道與開洞實體)").strong());
-                            self.viewport_3d.render(ui, &self.doc, &mut self.selected_id);
+                            clicked_element = clicked_element.or(self.viewport_3d.render(ui, &self.doc, &mut self.selected_id));
                         });
                     });
                 }
                 ViewLayout::Drafting2DOnly => {
                     ui.label(egui::RichText::new("2D 平面工程繪圖視口 (全螢幕精確繪圖)").strong());
-                    self.viewport_2d.render(
+                    clicked_element = clicked_element.or(self.viewport_2d.render(
                         ui,
                         &mut self.doc,
                         &mut self.undo_stack,
                         self.tool_mode,
                         &mut self.selected_id,
                         &mut self.status_text,
-                    );
+                    ));
                 }
                 ViewLayout::Orbit3DOnly => {
                     ui.label(egui::RichText::new("3D 空間實體模型視口 (全螢幕瀏覽與推拉)").strong());
-                    self.viewport_3d.render(ui, &self.doc, &mut self.selected_id);
+                    clicked_element = clicked_element.or(self.viewport_3d.render(ui, &self.doc, &mut self.selected_id));
                 }
             }
         });
+
+        if self.tool_mode == ToolMode::Paint {
+            if let Some(id) = clicked_element {
+                let sample = ctx.input(|i| i.modifiers.alt);
+                self.paint_click(id, sample);
+            }
+            self.render_material_panel(ctx);
+        }
 
         // 6. File Dialog Modals (Open, Export, Save As)
         self.render_file_modals(ctx);
@@ -1764,6 +1950,34 @@ fn tool_icon_button(
     });
 
     response.clicked()
+}
+
+/// Clickable colour chip for a material; translucent materials show over a checkerboard.
+pub(crate) fn material_swatch(ui: &mut egui::Ui, material: &Material, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(24.0), egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    let [r, g, b, a] = material.rgba();
+    if a < 255 {
+        let half = rect.width() / 2.0;
+        for (i, cell) in [(0.0, 0.0), (half, 0.0), (0.0, half), (half, half)].into_iter().enumerate() {
+            let shade = if i % 3 == 0 { 200 } else { 120 };
+            painter.rect_filled(
+                egui::Rect::from_min_size(rect.min + egui::vec2(cell.0, cell.1), egui::Vec2::splat(half)),
+                0.0,
+                egui::Color32::from_gray(shade),
+            );
+        }
+    }
+    painter.rect_filled(rect, 3.0, egui::Color32::from_rgba_unmultiplied(r, g, b, a));
+    let border = if selected {
+        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 215, 0))
+    } else if response.hovered() {
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 175, 255))
+    } else {
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 55, 62))
+    };
+    painter.rect_stroke(rect, 3.0, border, egui::StrokeKind::Inside);
+    response.on_hover_text(&material.name)
 }
 
 /// Pure vector graphics renderer for CAD & BIM tool icons
@@ -2098,6 +2312,34 @@ fn draw_cad_icon(painter: &egui::Painter, rect: egui::Rect, mode: ToolMode, is_a
             painter.line_segment([lamp_c, r_left], egui::Stroke::new(1.2, egui::Color32::from_rgba_unmultiplied(255, 220, 80, 180)));
             painter.line_segment([lamp_c, r_mid], egui::Stroke::new(1.4, egui::Color32::from_rgba_unmultiplied(255, 220, 80, 220)));
             painter.line_segment([lamp_c, r_right], egui::Stroke::new(1.2, egui::Color32::from_rgba_unmultiplied(255, 220, 80, 180)));
+        }
+        ToolMode::Outlet => {
+            // Duplex receptacle face plate with blade slots and earth holes
+            let plate = egui::Rect::from_center_size(rect.center(), egui::vec2(15.0, 22.0));
+            painter.rect(plate, 3.0, egui::Color32::from_rgb(70, 78, 92), egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+            for dy in [-5.0, 5.0] {
+                let c = rect.center() + egui::vec2(0.0, dy);
+                for dx in [-2.5, 2.5] {
+                    painter.line_segment([c + egui::vec2(dx, -2.5), c + egui::vec2(dx, 0.5)], egui::Stroke::new(1.3, accent_color));
+                }
+                painter.circle_filled(c + egui::vec2(0.0, 2.5), 0.9, accent_color);
+            }
+        }
+        ToolMode::Paint => {
+            // Tilted paint bucket pouring a drip of paint
+            let o = rect.min;
+            let bucket = vec![
+                o + egui::vec2(7.0, 13.0),
+                o + egui::vec2(16.0, 6.0),
+                o + egui::vec2(23.0, 15.0),
+                o + egui::vec2(14.0, 22.0),
+            ];
+            painter.add(egui::Shape::convex_polygon(bucket, egui::Color32::from_rgb(70, 78, 92), egui::Stroke::new(1.5, stroke_color)));
+            painter.line_segment([o + egui::vec2(11.5, 9.5), o + egui::vec2(9.0, 5.0)], egui::Stroke::new(1.3, stroke_color));
+            painter.line_segment([o + egui::vec2(9.0, 5.0), o + egui::vec2(18.0, 3.5)], egui::Stroke::new(1.3, stroke_color));
+            let paint = if is_active { egui::Color32::from_rgb(255, 120, 90) } else { egui::Color32::from_rgb(225, 110, 85) };
+            painter.line_segment([o + egui::vec2(23.0, 15.0), o + egui::vec2(25.0, 21.0)], egui::Stroke::new(2.2, paint));
+            painter.circle_filled(o + egui::vec2(25.0, 24.5), 2.6, paint);
         }
 
     }

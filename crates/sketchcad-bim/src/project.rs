@@ -1,8 +1,9 @@
 use crate::document::Storey;
 use crate::element::BimElement;
+use crate::material::Material;
 use crate::{
     Beam, Ceiling, Column, CurtainGrid, CurtainWall, Door, Furniture, IfcComponent, LightFixture,
-    Mullion, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
+    Mullion, Outlet, Railing, Ramp, Roof, Slab, Space, Stairs, Wall, Window,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ pub enum SerializableElement {
     Furniture(Furniture),
     LightFixture(LightFixture),
     IfcComponent(IfcComponent),
+    Outlet(Outlet),
 }
 
 impl SerializableElement {
@@ -55,6 +57,7 @@ impl SerializableElement {
             SerializableElement::Furniture(f) => Box::new(f),
             SerializableElement::LightFixture(l) => Box::new(l),
             SerializableElement::IfcComponent(c) => Box::new(c),
+            SerializableElement::Outlet(o) => Box::new(o),
         }
     }
 }
@@ -98,9 +101,18 @@ pub fn element_to_serializable(elem: &dyn BimElement) -> Option<SerializableElem
         Some(SerializableElement::LightFixture(l.clone()))
     } else if let Some(c) = any.downcast_ref::<IfcComponent>() {
         Some(SerializableElement::IfcComponent(c.clone()))
+    } else if let Some(o) = any.downcast_ref::<Outlet>() {
+        Some(SerializableElement::Outlet(o.clone()))
     } else {
         None
     }
+}
+
+/// A paint-bucket finish saved with the project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaintedElement {
+    pub element: ElementId,
+    pub material: Material,
 }
 
 /// Persistent SketchCAD Project File representation (`.skc` / `.sketchcad`)
@@ -115,6 +127,10 @@ pub struct SketchCadProject {
     pub hidden_elements: HashSet<ElementId>,
     #[serde(default)]
     pub storeys: Vec<Storey>,
+    #[serde(default)]
+    pub custom_materials: Vec<Material>,
+    #[serde(default)]
+    pub painted: Vec<PaintedElement>,
 }
 
 impl SketchCadProject {
@@ -129,6 +145,8 @@ impl SketchCadProject {
             elements: Vec::new(),
             hidden_elements: HashSet::new(),
             storeys: Vec::new(),
+            custom_materials: Vec::new(),
+            painted: Vec::new(),
         }
     }
 

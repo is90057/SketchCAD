@@ -97,10 +97,14 @@ impl IfcExporter {
             let entity_id = step_id;
             step_id += 1;
             let ifc_guid = window.id().to_ifc_guid();
+            let (height, width, partitioning) = match doc.get_window(window.id()) {
+                Some(w) => (w.height, w.width, w.window_type.ifc_partitioning(w.width)),
+                None => (1200.0, 1500.0, "SINGLE_PANEL"),
+            };
             writeln!(
                 file,
-                "#{}=IFCWINDOW('{}', $, '{}', 'Parametric BIM Window', $, $, $, $, 1200.0, 1500.0, .WINDOW., .WINDOW_CASEMENT.);",
-                entity_id, ifc_guid, window.name()
+                "#{}=IFCWINDOW('{}', $, '{}', 'Parametric BIM Window', $, $, $, $, {:.1}, {:.1}, .WINDOW., .{}., $);",
+                entity_id, ifc_guid, window.name(), height, width, partitioning
             )?;
         }
 
@@ -161,6 +165,18 @@ impl IfcExporter {
                 file,
                 "#{}=IFCSTAIR('{}', $, '{}', 'Straight Run Stair', $, $, $, $, .STRAIGHT_RUN_STAIR.);",
                 entity_id, ifc_guid, stair.name()
+            )?;
+        }
+
+        // 9. Power outlets
+        for outlet in doc.get_elements_by_kind(ElementKind::Outlet) {
+            let entity_id = step_id;
+            step_id += 1;
+            let ifc_guid = outlet.id().to_ifc_guid();
+            writeln!(
+                file,
+                "#{}=IFCOUTLET('{}', $, '{}', 'Power Outlet', $, $, $, $, .POWEROUTLET.);",
+                entity_id, ifc_guid, outlet.name()
             )?;
         }
 
