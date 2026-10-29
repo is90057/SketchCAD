@@ -972,6 +972,47 @@ impl BimDocument {
         }
     }
 
+    /// Adds the materials of the user's own library that the document does not carry yet,
+    /// so saved projects stay self-contained. Does not count as an edit of the model.
+    pub fn merge_custom_materials(&mut self, materials: &[Material]) {
+        for material in materials {
+            if !self.custom_materials.iter().any(|m| m.name == material.name) {
+                self.custom_materials.push(material.clone());
+            }
+        }
+    }
+
+    /// Edits the custom material called `old_name` (it may be renamed) and applies the new
+    /// definition to every element whose material or paint is that material. Returns the
+    /// number of elements updated.
+    pub fn update_material(&mut self, old_name: &str, material: Material) -> usize {
+        self.touch();
+        match self.custom_materials.iter_mut().find(|m| m.name == old_name) {
+            Some(existing) => *existing = material.clone(),
+            None => self.custom_materials.push(material.clone()),
+        }
+        let users: Vec<ElementId> = self
+            .elements
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.painted.get(id).is_some_and(|m| m.name == old_name)
+                    || self.element_material(*id).is_some_and(|m| m.name == old_name)
+            })
+            .collect();
+        for id in &users {
+            if let Some(paint) = self.painted.get_mut(id) {
+                if paint.name == old_name {
+                    *paint = material.clone();
+                }
+            }
+            if self.element_material(*id).is_some_and(|m| m.name == old_name) {
+                self.set_element_material(*id, material.clone());
+            }
+        }
+        users.len()
+    }
+
     /// Removes a custom material from the library; elements already painted with it keep it.
     pub fn remove_custom_material(&mut self, name: &str) -> bool {
         self.touch();
@@ -1204,6 +1245,35 @@ mod tests {
         assert_eq!(doc.display_rgba(wall_id), None);
         doc.remove_element(copy_id);
         assert_eq!(doc.paint_of(copy_id), None);
+    }
+
+    #[test]
+    fn editing_a_library_material_updates_every_element_using_it() {
+        use sketchcad_geom::Color;
+
+        let mut doc = BimDocument::new("Library");
+        let painted = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(4000.0, 0.0), 200.0, 3000.0, Material::concrete()));
+        let plain = doc.add_element(Wall::new(Point2D::new(0.0, 0.0), Point2D::new(0.0, 4000.0), 200.0, 3000.0, Material::concrete()));
+        let untouched = doc.add_element(Wall::new(Point2D::new(4000.0, 0.0), Point2D::new(4000.0, 4000.0), 200.0, 3000.0, Material::concrete()));
+
+        let sage = Material::custom("Sage 灰綠漆", Color::rgb(140, 160, 130));
+        doc.merge_custom_materials(&[sage.clone()]);
+        doc.merge_custom_materials(&[sage.clone()]);
+        assert_eq!(doc.custom_materials(), &[sage.clone()], "merging is idempotent");
+
+        doc.paint_element(painted, sage.clone());
+        doc.set_element_material(plain, sage.clone());
+
+        let mut olive = sage.clone();
+        olive.name = "Olive 橄欖綠漆".to_string();
+        olive.color = Color::rgb(110, 120, 60);
+        assert_eq!(doc.update_material(&sage.name, olive.clone()), 2);
+        assert_eq!(doc.custom_materials(), &[olive.clone()]);
+        assert_eq!(doc.paint_of(painted), Some(&olive));
+        assert_eq!(doc.element_material(painted), Some(&olive));
+        assert_eq!(doc.element_material(plain), Some(&olive));
+        assert_eq!(doc.paint_of(plain), None, "an unpainted element stays unpainted");
+        assert_eq!(doc.element_material(untouched), Some(&Material::concrete()));
     }
 
     #[test]

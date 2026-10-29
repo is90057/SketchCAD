@@ -44,6 +44,6 @@ pub use elements::space::{Space, SpaceType};
 pub use elements::stairs::Stairs;
 pub use elements::wall::Wall;
 pub use elements::window::{Window, WindowType};
-pub use material::{CompositeMaterial, Material, MaterialLayer};
+pub use material::{CompositeMaterial, Material, MaterialCategory, MaterialLayer, MaterialLibraryFile};
 
 

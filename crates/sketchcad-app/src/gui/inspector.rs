@@ -1264,35 +1264,30 @@ fn render_selected_element_properties(
                 None => ("自訂材料".to_string(), 2400.0, 3200.0),
             };
 
-            let materials_presets = [
-                ("鋼筋混凝土 (Concrete)", Material::concrete()),
-                ("紅磚砌體 (Red Brick)", Material::brick()),
-                ("結構鋼材 (Steel)", Material::structural_steel()),
-                ("雙層玻璃 (Glass)", Material::glass()),
-                ("實木橡木 (Timber)", Material::wood()),
-                ("輕鋼架石膏板 (Gypsum)", Material::gypsum()),
-                ("卡拉拉白大理石 (Carrara Marble)", Material::marble()),
-                ("海島型橡木地板 (Oak Flooring)", Material::wood_flooring()),
-                ("拋光石英磚 (Porcelain Tile)", Material::polished_tile()),
-                ("北美胡桃木實木皮 (Walnut Veneer)", Material::walnut()),
-                ("天然亞麻織物軟裝 (Linen Fabric)", Material::fabric()),
-                ("無縫微水泥地坪 (Microcement)", Material::microcement()),
-            ];
+            let materials_presets = Material::presets();
 
             let mut selected_preset_mat: Option<Material> = None;
             vs_property_row(ui, "指定材料 (Material)", "為構件選定物理材料配比與工程計價基準。", state, |ui| {
                 egui::ComboBox::from_id_salt(format!("mat_select_{:?}", id))
                     .selected_text(&current_mat_name)
                     .show_ui(ui, |ui| {
-                        for (title, mat) in &materials_presets {
-                            if ui.selectable_label(current_mat_name == mat.name, *title).clicked() {
-                                selected_preset_mat = Some(mat.clone());
-                            }
-                        }
                         if !doc.custom_materials().is_empty() {
-                            ui.separator();
+                            ui.label(egui::RichText::new("⭐ 自訂材質").small().strong());
                             for mat in doc.custom_materials() {
                                 if ui.selectable_label(current_mat_name == mat.name, format!("🎨 {}", mat.name)).clicked() {
+                                    selected_preset_mat = Some(mat.clone());
+                                }
+                            }
+                        }
+                        for category in sketchcad_bim::MaterialCategory::ALL {
+                            let mut group = materials_presets.iter().filter(|m| m.category == category).peekable();
+                            if group.peek().is_none() {
+                                continue;
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new(category.label()).small().strong());
+                            for mat in group {
+                                if ui.selectable_label(current_mat_name == mat.name, &mat.name).clicked() {
                                     selected_preset_mat = Some(mat.clone());
                                 }
                             }

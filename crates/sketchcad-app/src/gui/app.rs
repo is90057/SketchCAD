@@ -1,4 +1,5 @@
 use crate::gui::inspector::{InspectorPanel, InspectorState};
+use crate::gui::material_library::MaterialLibraryState;
 use crate::gui::viewport_2d::{ToolMode, Viewport2D};
 use crate::gui::viewport_3d::Viewport3D;
 use eframe::egui;
@@ -7,7 +8,7 @@ use sketchcad_bim::{
     SpaceType, Wall, Window,
 };
 use sketchcad_core::{ElementId, Point2D, Point3D};
-use sketchcad_geom::{Color, OpeningVoid};
+use sketchcad_geom::OpeningVoid;
 use sketchcad_io::{BcfHandler, BcfTopic, DwgAdapter, DxfHandler, IfcExporter, IfcImporter, SkpExporter, SkpImporter};
 use crate::updater::{self, UpdateState, Updater};
 use std::path::Path;
@@ -66,8 +67,7 @@ pub struct SketchCadApp {
 
     // Paint bucket (油漆桶) state
     pub paint_material: Material,
-    pub new_material_name: String,
-    pub new_material_color: egui::Color32,
+    pub material_library: MaterialLibraryState,
 }
 
 impl SketchCadApp {
@@ -110,8 +110,7 @@ impl SketchCadApp {
             show_about: false,
             updater,
             paint_material: Material::brick(),
-            new_material_name: String::new(),
-            new_material_color: egui::Color32::from_rgb(120, 150, 130),
+            material_library: MaterialLibraryState::load(),
         }
     }
 
@@ -342,7 +341,7 @@ impl SketchCadApp {
     }
 
 
-    fn show_notify(&mut self, msg: impl Into<String>) {
+    pub(crate) fn show_notify(&mut self, msg: impl Into<String>) {
         self.notification = Some((msg.into(), std::time::Instant::now()));
     }
 
@@ -690,103 +689,6 @@ impl SketchCadApp {
     }
 
     /// 「關於」視窗：產品名稱、版本編號與開發者
-    /// Floating material library of the paint bucket: pick the active material from the
-    /// presets and the document's custom materials, or add a new one.
-    fn render_material_panel(&mut self, ctx: &egui::Context) {
-        let library = self.doc.material_library();
-        let preset_count = library.len() - self.doc.custom_materials().len();
-        let mut chosen: Option<Material> = None;
-        let mut removed: Option<String> = None;
-        let mut added: Option<Material> = None;
-
-        egui::Window::new("🎨 材質庫 (Paint Bucket)")
-            .default_pos([90.0, 150.0])
-            .default_width(250.0)
-            .resizable(false)
-            .collapsible(true)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("目前材質:");
-                    material_swatch(ui, &self.paint_material, true);
-                    ui.label(egui::RichText::new(&self.paint_material.name).strong());
-                });
-                ui.label(
-                    egui::RichText::new("點擊視口中的構件即可貼附上色 · Alt + 點擊吸取材質")
-                        .small()
-                        .color(egui::Color32::from_rgb(160, 175, 195)),
-                );
-                ui.separator();
-
-                ui.label(egui::RichText::new("內建材質").small().strong());
-                ui.horizontal_wrapped(|ui| {
-                    for material in &library[..preset_count] {
-                        if material_swatch(ui, material, *material == self.paint_material).clicked() {
-                            chosen = Some(material.clone());
-                        }
-                    }
-                });
-
-                ui.label(egui::RichText::new("自訂材質").small().strong());
-                if preset_count == library.len() {
-                    ui.label(egui::RichText::new("尚無自訂材質，請於下方新增").small().weak());
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for material in &library[preset_count..] {
-                        let response = material_swatch(ui, material, *material == self.paint_material);
-                        if response.clicked() {
-                            chosen = Some(material.clone());
-                        }
-                        response.context_menu(|ui| {
-                            if ui.button("🗑 從材質庫移除").clicked() {
-                                removed = Some(material.name.clone());
-                                ui.close_menu();
-                            }
-                        });
-                    }
-                });
-
-                ui.separator();
-                ui.label(egui::RichText::new("＋ 新增材質").strong());
-                ui.horizontal(|ui| {
-                    ui.label("名稱:");
-                    ui.add(egui::TextEdit::singleline(&mut self.new_material_name).hint_text("例: 灰綠色乳膠漆").desired_width(150.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("顏色:");
-                    egui::color_picker::color_edit_button_srgba(
-                        ui,
-                        &mut self.new_material_color,
-                        egui::color_picker::Alpha::OnlyBlend,
-                    );
-                });
-                let name = self.new_material_name.trim();
-                if ui
-                    .add_enabled(!name.is_empty(), egui::Button::new("＋ 加入材質庫並選用"))
-                    .on_hover_text("同名的自訂材質會被更新")
-                    .clicked()
-                {
-                    let [r, g, b, a] = self.new_material_color.to_srgba_unmultiplied();
-                    added = Some(Material::custom(name, Color::rgba(r, g, b, a)));
-                }
-            });
-
-        if let Some(material) = added {
-            self.save_undo_state();
-            self.doc.add_custom_material(material.clone());
-            self.show_notify(format!("已新增材質: {}", material.name));
-            self.new_material_name.clear();
-            chosen = Some(material);
-        }
-        if let Some(name) = removed {
-            self.save_undo_state();
-            self.doc.remove_custom_material(&name);
-            self.show_notify(format!("已移除自訂材質: {}", name));
-        }
-        if let Some(material) = chosen {
-            self.paint_material = material;
-        }
-    }
-
     fn render_about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
         egui::Window::new("關於 SketchCAD")
@@ -1089,6 +991,9 @@ impl SketchCadApp {
 
 impl eframe::App for SketchCadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Keep the user's own materials available in whichever project is open
+        self.doc.merge_custom_materials(&self.material_library.user_materials);
+
         let mut do_undo = false;
         let mut do_redo = false;
         let mut do_cut = false;
@@ -1304,6 +1209,10 @@ impl eframe::App for SketchCadApp {
                     ui.checkbox(&mut self.viewport_2d.show_dimensions, "📐 顯示 2D 尺寸標註與輔助線");
                     ui.checkbox(&mut self.viewport_3d.settings.enable_section_cut, "🔪 啟用 3D 動態剖切盒 (透視室內裝修)");
                     ui.separator();
+                    if ui.button("🎨 材質庫 (Material Library)...").clicked() {
+                        self.material_library.open = true;
+                        ui.close_menu();
+                    }
                     if ui.button("⚙ 3D 渲染品質、解析度與剖切設定...").clicked() {
                         self.viewport_3d.settings.show_settings_panel = true;
                         ui.close_menu();
@@ -1453,6 +1362,18 @@ impl eframe::App for SketchCadApp {
                         self.viewport_2d.curtain_wall_start_pt = None;
                         self.viewport_2d.space_start_pt = None;
                         self.viewport_2d.move_base_pt = None;
+                    }
+                }
+
+                ui.separator();
+                if ui
+                    .selectable_label(self.material_library.open || self.tool_mode == ToolMode::Paint, "🎨 材質庫")
+                    .on_hover_text("瀏覽內建材質、新增與管理自訂材質 (自訂材質會保存並用於所有專案)")
+                    .clicked()
+                {
+                    self.material_library.open = !(self.material_library.open || self.tool_mode == ToolMode::Paint);
+                    if !self.material_library.open && self.tool_mode == ToolMode::Paint {
+                        self.tool_mode = ToolMode::Select;
                     }
                 }
 
@@ -1837,7 +1758,9 @@ impl eframe::App for SketchCadApp {
                 let sample = ctx.input(|i| i.modifiers.alt);
                 self.paint_click(id, sample);
             }
-            self.render_material_panel(ctx);
+        }
+        if self.tool_mode == ToolMode::Paint || self.material_library.open {
+            self.render_material_library(ctx);
         }
 
         // 6. File Dialog Modals (Open, Export, Save As)
@@ -1977,7 +1900,19 @@ pub(crate) fn material_swatch(ui: &mut egui::Ui, material: &Material, selected: 
         egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 55, 62))
     };
     painter.rect_stroke(rect, 3.0, border, egui::StrokeKind::Inside);
-    response.on_hover_text(&material.name)
+    response.on_hover_ui(|ui| {
+        ui.label(egui::RichText::new(&material.name).strong());
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {:.0} kg/m³ · ${:.0}/m³ · λ {:.2} W/m·K",
+                material.category.label(),
+                material.density_kg_m3,
+                material.cost_per_m3,
+                material.thermal_conductivity
+            ))
+            .small(),
+        );
+    })
 }
 
 /// Pure vector graphics renderer for CAD & BIM tool icons
